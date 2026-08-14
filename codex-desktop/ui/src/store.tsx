@@ -1,0 +1,853 @@
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+} from "react";
+import type { ReactNode } from "react";
+import * as api from "./api";
+import type {
+  AppServerEventEnvelope,
+  ApprovalMode,
+  CodexConfig,
+  CommandExecutionItem,
+  ConfigLayerMetadata,
+  ConfigRequirements,
+  Model,
+  ModelSelection,
+  PendingApproval,
+  PendingCommandExecutionApproval,
+  PendingPermissionsApproval,
+  Project,
+  SettingEdit,
+  ThreadItem,
+  Turn,
+  TurnStatus,
+} from "./types";
+
+/// Whether this thread's pre-existing history has been pulled in via
+/// `thread/resume`. Threads created in this session start `loaded` (there is
+/// no prior history to fetch); threads picked from the sidebar start `idle`
+/// and must be resumed before their items exist locally at all.
+type HistoryStatus = "idle" | "loading" | "loaded" | "error";
+
+export interface ThreadState {
+  itemOrder: string[];
+  items: Record<string, ThreadItem>;
+  /// item id -> the turn it belongs to. Populated from three sources so it is
+  /// complete regardless of how an item arrived: `turn.id` when bulk-loading
+  /// history, and the `turnId` on delta / `item/completed` notifications for
+  /// live items. Backs the per-message Fork action (ADR-0018), which needs a
+  /// `lastTurnId` to fork through.
+  itemTurnIds: Record<string, string>;
+  turnStatus: Record<string, TurnStatus>;
+  activeTurnId: string | null;
+  /// Unix ms when the active turn's first item started, taken from
+  /// `item/started`'s `startedAtMs`. Backs the live "working for Xs" row —
+  /// `Turn` carries `startedAt` but only on the resume/fork responses, never
+  /// on the live `turn/started` notification.
+  activeTurnStartedAtMs: number | null;
+  pendingApprovals: PendingApproval[];
+  historyStatus: HistoryStatus;
+  historyError: string | null;
+}
+
+function emptyThread(): ThreadState {
+  return {
+    itemOrder: [],
+    items: {},
+    itemTurnIds: {},
+    turnStatus: {},
+    activeTurnId: null,
+    activeTurnStartedAtMs: null,
+    pendingApprovals: [],
+    historyStatus: "idle",
+    historyError: null,
+  };
+}
+
+interface State {
+  projects: Project[];
+  activeProjectPath: string | null;
+  threadsByProject: Record<string, unknown[]>; // raw ThreadListResponse.data, unmapped
+  activeThreadId: string | null;
+  threads: Record<string, ThreadState>;
+  /// ADR-0016 layer 1. Held app-level rather than per-thread so switching
+  /// threads keeps the user's chosen posture; applied to the server on thread
+  /// start and on change.
+  ///
+  /// This is the *session* value. Its persisted counterpart is
+  /// `defaultApprovalMode` — see the note on `approvalModeOverridden`.
+  approvalMode: ApprovalMode;
+  /// The value persisted in `config.toml` (ADR-0020). `null` means the config
+  /// holds a combination the 3-preset selector can't express (a hand-edited
+  /// file, or the `read-only` preset) — reported honestly rather than snapped
+  /// to a preset the user never chose.
+  defaultApprovalMode: ApprovalMode | null;
+  /// Set once the composer changes the mode this session. ADR-0020 makes the
+  /// composer an *override* of the persisted default: without this flag,
+  /// editing the default in Settings would silently stomp a deliberate
+  /// per-session choice the user made in the composer.
+  approvalModeOverridden: boolean;
+  /// Effective `config.toml` (all layers merged) and, per key, which layer it
+  /// came from — so a setting pinned by an org policy can say so.
+  config: CodexConfig | null;
+  configOrigins: Record<string, ConfigLayerMetadata>;
+  /// Deployment limits on allowed values; `null` when unconfigured (usual).
+  configRequirements: ConfigRequirements | null;
+  /// Whether the settings surface is open, and on which screen (ADR: the
+  /// Official App shows settings as a full-window takeover, not a modal).
+  settingsScreen: string | null;
+  /// Model catalog from `model/list`, loaded once at startup. Empty until it
+  /// resolves (or if it fails — the picker then simply has nothing to offer,
+  /// which is better than blocking the composer).
+  models: Model[];
+  /// Same app-level treatment as `approvalMode`, for the same reason.
+  modelSelection: ModelSelection;
+  /// Composer override tracking, mirroring `approvalModeOverridden`.
+  modelSelectionOverridden: boolean;
+}
+
+type Action =
+  | { type: "PROJECTS_LOADED"; projects: Project[] }
+  | { type: "PROJECT_ADDED"; project: Project }
+  | { type: "PROJECT_REMOVED"; id: string }
+  | { type: "ACTIVE_PROJECT_SET"; path: string | null }
+  | { type: "THREADS_LOADED"; projectPath: string; threads: unknown[] }
+  | { type: "ACTIVE_THREAD_SET"; threadId: string | null }
+  | { type: "ITEM_UPSERT_DELTA"; threadId: string; turnId: string; itemId: string; deltaText: string }
+  | {
+      type: "ITEM_STARTED";
+      threadId: string;
+      turnId: string;
+      item: ThreadItem;
+      startedAtMs: number;
+    }
+  | {
+      type: "ITEM_OUTPUT_DELTA";
+      threadId: string;
+      turnId: string;
+      itemId: string;
+      deltaText: string;
+    }
+  | { type: "ITEM_COMPLETED"; threadId: string; turnId: string; item: ThreadItem }
+  | { type: "TURN_STARTED"; threadId: string; turnId: string }
+  | { type: "TURN_STATUS"; threadId: string; turnId: string; status: TurnStatus }
+  | { type: "APPROVAL_REQUESTED"; threadId: string; approval: PendingApproval }
+  | { type: "APPROVAL_RESOLVED"; threadId: string; requestId: unknown }
+  | { type: "HISTORY_LOADING"; threadId: string }
+  | { type: "HISTORY_LOADED"; threadId: string; turns: Turn[] }
+  | { type: "HISTORY_FAILED"; threadId: string; error: string }
+  | { type: "APPROVAL_MODE_SET"; mode: ApprovalMode; overrides: boolean }
+  | { type: "MODELS_LOADED"; models: Model[] }
+  | { type: "MODEL_SELECTION_SET"; selection: ModelSelection; overrides: boolean }
+  | {
+      type: "CONFIG_LOADED";
+      config: CodexConfig;
+      origins: Record<string, ConfigLayerMetadata>;
+      defaultApprovalMode: ApprovalMode | null;
+    }
+  | { type: "CONFIG_REQUIREMENTS_LOADED"; requirements: ConfigRequirements | null }
+  | { type: "SETTINGS_SCREEN_SET"; screen: string | null };
+
+function withThread(state: State, threadId: string, update: (thread: ThreadState) => ThreadState): State {
+  const current = state.threads[threadId] ?? emptyThread();
+  return { ...state, threads: { ...state.threads, [threadId]: update(current) } };
+}
+
+function reducer(state: State, action: Action): State {
+  switch (action.type) {
+    case "PROJECTS_LOADED":
+      return { ...state, projects: action.projects };
+    case "PROJECT_ADDED":
+      return { ...state, projects: [...state.projects, action.project] };
+    case "PROJECT_REMOVED":
+      return { ...state, projects: state.projects.filter((p) => p.id !== action.id) };
+    case "ACTIVE_PROJECT_SET":
+      return { ...state, activeProjectPath: action.path };
+    case "THREADS_LOADED":
+      return {
+        ...state,
+        threadsByProject: { ...state.threadsByProject, [action.projectPath]: action.threads },
+      };
+    case "ACTIVE_THREAD_SET":
+      return { ...state, activeThreadId: action.threadId };
+    case "ITEM_UPSERT_DELTA":
+      return withThread(state, action.threadId, (thread) => {
+        const existing = thread.items[action.itemId];
+        // AgentMessage/Reasoning deltas accumulate `text`; item/completed
+        // (below) is always authoritative and overwrites this wholesale.
+        const text = (existing && "text" in existing ? existing.text : "") + action.deltaText;
+        const item: ThreadItem = existing
+          ? ({ ...existing, text } as ThreadItem)
+          : ({ type: "agentMessage", id: action.itemId, text } as ThreadItem);
+        const itemOrder = thread.itemOrder.includes(action.itemId)
+          ? thread.itemOrder
+          : [...thread.itemOrder, action.itemId];
+        return {
+          ...thread,
+          items: { ...thread.items, [action.itemId]: item },
+          itemTurnIds: { ...thread.itemTurnIds, [action.itemId]: action.turnId },
+          itemOrder,
+          activeTurnId: action.turnId,
+        };
+      });
+    case "ITEM_STARTED":
+      return withThread(state, action.threadId, (thread) => {
+        // `item/started` carries the whole `ThreadItem`, so this is what makes
+        // long-running work (a command execution, above all) visible while it
+        // runs instead of only once it finishes — ADR-0013's "watch Codex
+        // work" tier depends on it.
+        //
+        // If deltas raced ahead of this notification the accumulated item is
+        // the more complete one; keep it rather than clobbering streamed text
+        // with the empty item the server started from.
+        const existing = thread.items[action.item.id];
+        const item = existing ?? action.item;
+        const itemOrder = thread.itemOrder.includes(action.item.id)
+          ? thread.itemOrder
+          : [...thread.itemOrder, action.item.id];
+        return {
+          ...thread,
+          items: { ...thread.items, [action.item.id]: item },
+          itemTurnIds: { ...thread.itemTurnIds, [action.item.id]: action.turnId },
+          itemOrder,
+          activeTurnId: action.turnId,
+          // First item of the turn establishes the elapsed-time baseline.
+          activeTurnStartedAtMs:
+            thread.activeTurnId === action.turnId && thread.activeTurnStartedAtMs !== null
+              ? thread.activeTurnStartedAtMs
+              : action.startedAtMs,
+        };
+      });
+    case "ITEM_OUTPUT_DELTA":
+      return withThread(state, action.threadId, (thread) => {
+        // Terminal output, not model text: it appends to `aggregatedOutput`,
+        // which is why it can't share the `text`-oriented delta path above.
+        const existing = thread.items[action.itemId];
+        if (!existing || existing.type !== "commandExecution") {
+          // Output for an item we haven't seen started yet; `item/completed`
+          // carries the full `aggregatedOutput` anyway, so dropping the chunk
+          // loses nothing permanent.
+          return thread;
+        }
+        const command = existing as CommandExecutionItem;
+        const item: ThreadItem = {
+          ...command,
+          aggregatedOutput: (command.aggregatedOutput ?? "") + action.deltaText,
+        };
+        return {
+          ...thread,
+          items: { ...thread.items, [action.itemId]: item },
+          itemTurnIds: { ...thread.itemTurnIds, [action.itemId]: action.turnId },
+        };
+      });
+    case "ITEM_COMPLETED":
+      return withThread(state, action.threadId, (thread) => {
+        const itemOrder = thread.itemOrder.includes(action.item.id)
+          ? thread.itemOrder
+          : [...thread.itemOrder, action.item.id];
+        return {
+          ...thread,
+          items: { ...thread.items, [action.item.id]: action.item },
+          itemTurnIds: { ...thread.itemTurnIds, [action.item.id]: action.turnId },
+          itemOrder,
+        };
+      });
+    case "TURN_STARTED":
+      return withThread(state, action.threadId, (thread) => ({
+        ...thread,
+        activeTurnId: action.turnId,
+        turnStatus: { ...thread.turnStatus, [action.turnId]: "inProgress" },
+        // `turn/started` has no timestamp of its own; start the clock now and
+        // let the first `item/started` refine it.
+        activeTurnStartedAtMs: Date.now(),
+      }));
+    case "TURN_STATUS":
+      return withThread(state, action.threadId, (thread) => {
+        const stillRunning = action.status === "inProgress";
+        return {
+          ...thread,
+          turnStatus: { ...thread.turnStatus, [action.turnId]: action.status },
+          activeTurnId: stillRunning ? action.turnId : null,
+          activeTurnStartedAtMs: stillRunning ? thread.activeTurnStartedAtMs : null,
+        };
+      });
+    case "APPROVAL_REQUESTED":
+      return withThread(state, action.threadId, (thread) => ({
+        ...thread,
+        pendingApprovals: [...thread.pendingApprovals, action.approval],
+      }));
+    case "APPROVAL_RESOLVED":
+      return withThread(state, action.threadId, (thread) => ({
+        ...thread,
+        pendingApprovals: thread.pendingApprovals.filter(
+          (approval) => JSON.stringify(approval.requestId) !== JSON.stringify(action.requestId),
+        ),
+      }));
+    case "HISTORY_LOADING":
+      return withThread(state, action.threadId, (thread) => ({
+        ...thread,
+        historyStatus: "loading",
+        historyError: null,
+      }));
+    case "HISTORY_LOADED":
+      return withThread(state, action.threadId, (thread) => {
+        // Bulk-load rather than replaying through the delta path: `turn.items`
+        // are already-complete items, and `turn.id` is the authoritative turn
+        // id for every one of them.
+        const items: Record<string, ThreadItem> = { ...thread.items };
+        const itemTurnIds: Record<string, string> = { ...thread.itemTurnIds };
+        const turnStatus: Record<string, TurnStatus> = { ...thread.turnStatus };
+        const historyOrder: string[] = [];
+
+        for (const turn of action.turns) {
+          turnStatus[turn.id] = turn.status;
+          for (const item of turn.items ?? []) {
+            if (!(item.id in items)) historyOrder.push(item.id);
+            items[item.id] = item;
+            itemTurnIds[item.id] = turn.id;
+          }
+        }
+
+        // History goes before anything that streamed in already (a live turn
+        // can only ever be newer than persisted history).
+        const itemOrder = [
+          ...historyOrder,
+          ...thread.itemOrder.filter((id) => !historyOrder.includes(id)),
+        ];
+
+        return {
+          ...thread,
+          items,
+          itemTurnIds,
+          turnStatus,
+          itemOrder,
+          historyStatus: "loaded",
+          historyError: null,
+        };
+      });
+    case "HISTORY_FAILED":
+      return withThread(state, action.threadId, (thread) => ({
+        ...thread,
+        historyStatus: "error",
+        historyError: action.error,
+      }));
+    case "APPROVAL_MODE_SET":
+      return {
+        ...state,
+        approvalMode: action.mode,
+        approvalModeOverridden: action.overrides || state.approvalModeOverridden,
+      };
+    case "MODELS_LOADED": {
+      // Adopt the catalog's default as the initial selection, so the picker
+      // shows what the server would actually use rather than a blank label.
+      // Guarded on `model === null` so this can't overwrite a model already
+      // taken from `config.toml` — the two loads race, and the persisted
+      // setting must win over the catalog's generic default either way.
+      const fallback = action.models.find((model) => model.isDefault) ?? action.models[0];
+      const selection =
+        state.modelSelection.model === null && fallback
+          ? { model: fallback.model, effort: fallback.defaultReasoningEffort }
+          : state.modelSelection;
+      return { ...state, models: action.models, modelSelection: selection };
+    }
+    case "MODEL_SELECTION_SET":
+      return {
+        ...state,
+        modelSelection: action.selection,
+        modelSelectionOverridden: action.overrides || state.modelSelectionOverridden,
+      };
+    case "CONFIG_LOADED": {
+      // The persisted defaults seed the session values, but never clobber a
+      // choice the user already made in the composer this session (ADR-0020).
+      const approvalMode =
+        !state.approvalModeOverridden && action.defaultApprovalMode
+          ? action.defaultApprovalMode
+          : state.approvalMode;
+      const modelSelection =
+        !state.modelSelectionOverridden && action.config.model
+          ? {
+              model: action.config.model,
+              effort: action.config.modelReasoningEffort ?? state.modelSelection.effort,
+            }
+          : state.modelSelection;
+      return {
+        ...state,
+        config: action.config,
+        configOrigins: action.origins,
+        defaultApprovalMode: action.defaultApprovalMode,
+        approvalMode,
+        modelSelection,
+      };
+    }
+    case "CONFIG_REQUIREMENTS_LOADED":
+      return { ...state, configRequirements: action.requirements };
+    case "SETTINGS_SCREEN_SET":
+      return { ...state, settingsScreen: action.screen };
+    default:
+      return state;
+  }
+}
+
+const initialState: State = {
+  projects: [],
+  activeProjectPath: null,
+  threadsByProject: {},
+  activeThreadId: null,
+  threads: {},
+  // Matches the Official App's default selection in the reference
+  // screenshots. Replaced at startup by the persisted default from
+  // `config.toml`, when that config names one of the three modes.
+  approvalMode: "helpMeApprove",
+  defaultApprovalMode: null,
+  approvalModeOverridden: false,
+  config: null,
+  configOrigins: {},
+  configRequirements: null,
+  settingsScreen: null,
+  models: [],
+  // Null until `model/list` or `config/read` resolves; null means "let the
+  // server decide".
+  modelSelection: { model: null, effort: null },
+  modelSelectionOverridden: false,
+};
+
+interface StoreValue {
+  state: State;
+  dispatch: React.Dispatch<Action>;
+  setActiveProject: (path: string | null) => Promise<void>;
+  setActiveThread: (threadId: string | null) => Promise<void>;
+  addProject: (path: string) => Promise<void>;
+  removeProject: (id: string) => Promise<void>;
+  startNewThread: (cwd: string) => Promise<void>;
+  sendMessage: (threadId: string, text: string) => Promise<void>;
+  forkThreadFromTurn: (threadId: string, turnId: string) => Promise<void>;
+  setApprovalMode: (mode: ApprovalMode) => Promise<void>;
+  setModelSelection: (selection: ModelSelection) => Promise<void>;
+  interruptActiveTurn: (threadId: string) => Promise<void>;
+  openSettings: (screen?: string) => void;
+  closeSettings: () => void;
+  /// Settings-screen writers (ADR-0020): these persist to `config.toml`,
+  /// unlike their composer counterparts above which are session-only.
+  setDefaultApprovalMode: (mode: ApprovalMode) => Promise<void>;
+  writeSetting: (edit: SettingEdit) => Promise<void>;
+  reloadConfig: () => Promise<void>;
+}
+
+const StoreContext = createContext<StoreValue | null>(null);
+
+// Deltas that append to an item's `text`. All carry `delta` plus the
+// `threadId`/`turnId`/`itemId` correlation key.
+//
+// `item/commandExecution/outputDelta` is deliberately *not* here: it appends to
+// `aggregatedOutput` rather than `text`, so it gets its own action
+// (`ITEM_OUTPUT_DELTA`) below.
+const TEXT_DELTA_METHODS = new Set([
+  "item/agentMessage/delta",
+  "item/reasoning/textDelta",
+  // Reasoning arrives on two channels — the raw text above and the summary
+  // stream here. Both land in the same accumulated item text.
+  "item/reasoning/summaryTextDelta",
+]);
+
+const COMMAND_OUTPUT_DELTA_METHOD = "item/commandExecution/outputDelta";
+
+export function StoreProvider({ children }: { children: ReactNode }) {
+  const [state, dispatch] = useReducer(reducer, initialState);
+  const activeProjectPathRef = useRef<string | null>(null);
+  activeProjectPathRef.current = state.activeProjectPath;
+  // Read inside callbacks that must not re-create on every thread-state
+  // change (they'd otherwise re-run effects that depend on their identity).
+  const threadsRef = useRef<Record<string, ThreadState>>({});
+  threadsRef.current = state.threads;
+  const approvalModeRef = useRef<ApprovalMode>(initialState.approvalMode);
+  approvalModeRef.current = state.approvalMode;
+  const activeThreadIdRef = useRef<string | null>(null);
+  activeThreadIdRef.current = state.activeThreadId;
+
+  const modelSelectionRef = useRef<ModelSelection>(initialState.modelSelection);
+  modelSelectionRef.current = state.modelSelection;
+
+  useEffect(() => {
+    api.listProjects().then((projects) => dispatch({ type: "PROJECTS_LOADED", projects }));
+  }, []);
+
+  useEffect(() => {
+    api
+      .listModels()
+      .then((response) => dispatch({ type: "MODELS_LOADED", models: response.data ?? [] }))
+      // A missing catalog leaves the picker empty rather than breaking the
+      // composer; threads then run at whatever the server defaults to.
+      .catch((error) => tracingWarn(`model/list failed: ${String(error)}`));
+  }, []);
+
+  /// Loads `config.toml` and seeds the session's approval mode / model from
+  /// the persisted defaults (ADR-0020). Also used to refresh after a write, so
+  /// the screens always show the server's view rather than an optimistic one.
+  const reloadConfig = useCallback(async () => {
+    const [read, defaultApprovalMode] = await Promise.all([
+      api.readConfig(),
+      // Mapped in Rust so the forward/reverse approval-mode mapping stays in
+      // one place; `null` means "config isn't one of the three presets".
+      api.readDefaultApprovalMode(),
+    ]);
+    dispatch({
+      type: "CONFIG_LOADED",
+      config: read.config ?? {},
+      origins: read.origins ?? {},
+      defaultApprovalMode,
+    });
+  }, []);
+
+  useEffect(() => {
+    // Config failing to load leaves the app on its built-in defaults rather
+    // than blocking startup; the settings screens surface the error.
+    reloadConfig().catch((error) => tracingWarn(`config/read failed: ${String(error)}`));
+    api
+      .readConfigRequirements()
+      .then((response) =>
+        dispatch({
+          type: "CONFIG_REQUIREMENTS_LOADED",
+          requirements: response.requirements ?? null,
+        }),
+      )
+      .catch((error) => tracingWarn(`configRequirements/read failed: ${String(error)}`));
+  }, [reloadConfig]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    api.onAppServerEvent((envelope) => handleEvent(envelope, dispatch)).then((fn) => {
+      unlisten = fn;
+    });
+    return () => unlisten?.();
+  }, []);
+
+  const setActiveProject = useCallback(async (path: string | null) => {
+    dispatch({ type: "ACTIVE_PROJECT_SET", path });
+    dispatch({ type: "ACTIVE_THREAD_SET", threadId: null });
+    if (!path) return;
+    const response = (await api.listThreads(path)) as { data?: unknown[] };
+    dispatch({ type: "THREADS_LOADED", projectPath: path, threads: response.data ?? [] });
+  }, []);
+
+  // Threads picked from the sidebar have no items in this store yet — the
+  // store is otherwise purely event-driven, so a thread that predates this app
+  // session would render as a blank pane. `thread/resume` both loads the
+  // thread server-side (so turns can be sent to it) and returns its full
+  // history in `thread.turns`.
+  const setActiveThread = useCallback(async (threadId: string | null) => {
+    dispatch({ type: "ACTIVE_THREAD_SET", threadId });
+    if (!threadId) return;
+
+    const existing = threadsRef.current[threadId];
+    if (existing && (existing.historyStatus === "loaded" || existing.historyStatus === "loading")) {
+      return;
+    }
+
+    dispatch({ type: "HISTORY_LOADING", threadId });
+    try {
+      const response = await api.resumeThread(threadId);
+      dispatch({ type: "HISTORY_LOADED", threadId, turns: response.thread?.turns ?? [] });
+    } catch (error) {
+      // Surfaced in the main pane rather than swallowed — a silently blank
+      // pane is exactly the failure this path exists to prevent.
+      dispatch({ type: "HISTORY_FAILED", threadId, error: String(error) });
+    }
+  }, []);
+
+  const addProject = useCallback(async (path: string) => {
+    const project = await api.addProject(path);
+    dispatch({ type: "PROJECT_ADDED", project });
+  }, []);
+
+  const removeProject = useCallback(async (id: string) => {
+    await api.removeProject(id);
+    dispatch({ type: "PROJECT_REMOVED", id });
+  }, []);
+
+  const startNewThread = useCallback(async (cwd: string) => {
+    const selection = modelSelectionRef.current;
+    const response = (await api.startThread(
+      cwd,
+      approvalModeRef.current,
+      selection.model,
+      selection.effort,
+    )) as {
+      thread?: { id?: string };
+    };
+    const threadId = response.thread?.id;
+    if (!threadId) return;
+    dispatch({ type: "ACTIVE_THREAD_SET", threadId });
+    // Brand new thread: there is no prior history to fetch, so mark it loaded
+    // rather than letting `setActiveThread` resume an empty thread later.
+    dispatch({ type: "HISTORY_LOADED", threadId, turns: [] });
+    const path = activeProjectPathRef.current;
+    if (path) {
+      const list = (await api.listThreads(path)) as { data?: unknown[] };
+      dispatch({ type: "THREADS_LOADED", projectPath: path, threads: list.data ?? [] });
+    }
+  }, []);
+
+  const sendMessage = useCallback(async (threadId: string, text: string) => {
+    await api.sendTurn(threadId, text);
+  }, []);
+
+  /// ADR-0018's Fork action. `thread/fork` returns the new thread, which
+  /// becomes active; its history comes back through the normal resume path.
+  const forkThreadFromTurn = useCallback(async (threadId: string, turnId: string) => {
+    const response = await api.forkThread(threadId, turnId);
+    const forkedId = response.thread?.id;
+    if (!forkedId) return;
+    dispatch({ type: "ACTIVE_THREAD_SET", threadId: forkedId });
+    dispatch({ type: "HISTORY_LOADED", threadId: forkedId, turns: response.thread?.turns ?? [] });
+    const path = activeProjectPathRef.current;
+    if (path) {
+      const list = (await api.listThreads(path)) as { data?: unknown[] };
+      dispatch({ type: "THREADS_LOADED", projectPath: path, threads: list.data ?? [] });
+    }
+  }, []);
+
+  /// ADR-0016 layer 1, composer side. Applied to the active thread
+  /// immediately and carried onto later threads by `startNewThread`, but
+  /// deliberately *not* written to `config.toml`: ADR-0020 makes this an
+  /// override of the persisted default, not a way to silently rewrite it.
+  const setApprovalMode = useCallback(async (mode: ApprovalMode) => {
+    dispatch({ type: "APPROVAL_MODE_SET", mode, overrides: true });
+    const threadId = activeThreadIdRef.current;
+    if (threadId) await api.setApprovalMode(threadId, mode);
+  }, []);
+
+  /// Same shape as `setApprovalMode`, and the same override semantics.
+  const setModelSelection = useCallback(async (selection: ModelSelection) => {
+    dispatch({ type: "MODEL_SELECTION_SET", selection, overrides: true });
+    const threadId = activeThreadIdRef.current;
+    if (threadId) await api.setModel(threadId, selection.model, selection.effort);
+  }, []);
+
+  /// Settings side of the same setting: persists to `config.toml`, then
+  /// reloads so the session value follows unless the composer overrode it.
+  const setDefaultApprovalMode = useCallback(
+    async (mode: ApprovalMode) => {
+      await api.setDefaultApprovalMode(mode);
+      await reloadConfig();
+    },
+    [reloadConfig],
+  );
+
+  /// Generic single-key writer behind the settings controls. Reloads rather
+  /// than optimistically patching local state: the server may normalize the
+  /// value, or refuse it because a managed layer pins the key.
+  const writeSetting = useCallback(
+    async (edit: SettingEdit) => {
+      await api.writeConfigValue(edit);
+      await reloadConfig();
+    },
+    [reloadConfig],
+  );
+
+  const openSettings = useCallback((screen = "general") => {
+    dispatch({ type: "SETTINGS_SCREEN_SET", screen });
+  }, []);
+
+  const closeSettings = useCallback(() => {
+    dispatch({ type: "SETTINGS_SCREEN_SET", screen: null });
+  }, []);
+
+  /// Stops the thread's running turn. Reads `activeTurnId` at call time rather
+  /// than from a captured render, so a turn that finished between paint and
+  /// click is a no-op instead of an interrupt aimed at a stale turn id.
+  const interruptActiveTurn = useCallback(async (threadId: string) => {
+    const thread = threadsRef.current[threadId];
+    const turnId = thread?.activeTurnId;
+    if (!turnId || thread?.turnStatus[turnId] !== "inProgress") return;
+    await api.interruptTurn(threadId, turnId);
+  }, []);
+
+  const value = useMemo<StoreValue>(
+    () => ({
+      state,
+      dispatch,
+      setActiveProject,
+      setActiveThread,
+      addProject,
+      removeProject,
+      startNewThread,
+      sendMessage,
+      forkThreadFromTurn,
+      setApprovalMode,
+      setModelSelection,
+      interruptActiveTurn,
+      openSettings,
+      closeSettings,
+      setDefaultApprovalMode,
+      writeSetting,
+      reloadConfig,
+    }),
+    [
+      state,
+      setActiveProject,
+      setActiveThread,
+      addProject,
+      removeProject,
+      startNewThread,
+      sendMessage,
+      forkThreadFromTurn,
+      setApprovalMode,
+      setModelSelection,
+      interruptActiveTurn,
+      openSettings,
+      closeSettings,
+      setDefaultApprovalMode,
+      writeSetting,
+      reloadConfig,
+    ],
+  );
+
+  return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
+}
+
+export function useStore(): StoreValue {
+  const value = useContext(StoreContext);
+  if (!value) throw new Error("useStore must be used within StoreProvider");
+  return value;
+}
+
+function handleEvent(envelope: AppServerEventEnvelope, dispatch: React.Dispatch<Action>) {
+  if (envelope.kind === "notification" && envelope.notification) {
+    handleNotification(envelope.notification.method, envelope.notification.params, dispatch);
+  } else if (envelope.kind === "request" && envelope.request) {
+    handleServerRequest(envelope.requestId, envelope.request, dispatch);
+  } else if (envelope.kind === "disconnected") {
+    tracingWarn(`app-server disconnected: ${envelope.message ?? "unknown reason"}`);
+  }
+}
+
+function handleNotification(method: string, params: unknown, dispatch: React.Dispatch<Action>) {
+  const p = params as Record<string, unknown>;
+  if (TEXT_DELTA_METHODS.has(method)) {
+    dispatch({
+      type: "ITEM_UPSERT_DELTA",
+      threadId: String(p.threadId),
+      turnId: String(p.turnId),
+      itemId: String(p.itemId),
+      deltaText: String(p.delta ?? ""),
+    });
+    return;
+  }
+  if (method === COMMAND_OUTPUT_DELTA_METHOD) {
+    dispatch({
+      type: "ITEM_OUTPUT_DELTA",
+      threadId: String(p.threadId),
+      turnId: String(p.turnId),
+      itemId: String(p.itemId),
+      deltaText: String(p.delta ?? ""),
+    });
+    return;
+  }
+  if (method === "item/started") {
+    dispatch({
+      type: "ITEM_STARTED",
+      threadId: String(p.threadId),
+      turnId: String(p.turnId),
+      item: p.item as ThreadItem,
+      startedAtMs: Number(p.startedAtMs ?? Date.now()),
+    });
+    return;
+  }
+  if (method === "item/completed") {
+    dispatch({
+      type: "ITEM_COMPLETED",
+      threadId: String(p.threadId),
+      turnId: String(p.turnId),
+      item: p.item as ThreadItem,
+    });
+    return;
+  }
+  if (method === "turn/started") {
+    const turn = p.turn as Record<string, unknown> | undefined;
+    dispatch({
+      type: "TURN_STARTED",
+      threadId: String(p.threadId),
+      turnId: String(turn?.id ?? p.turnId ?? ""),
+    });
+    return;
+  }
+  if (method === "turn/completed") {
+    const turn = p.turn as Record<string, unknown> | undefined;
+    const status = String(turn?.status ?? "completed") as TurnStatus;
+    dispatch({
+      type: "TURN_STATUS",
+      threadId: String(p.threadId),
+      turnId: String(turn?.id ?? ""),
+      status,
+    });
+  }
+}
+
+function handleServerRequest(
+  requestId: unknown,
+  request: { method: string; params: unknown },
+  dispatch: React.Dispatch<Action>,
+) {
+  const p = request.params as Record<string, unknown>;
+  const base = {
+    requestId,
+    threadId: String(p.threadId),
+    turnId: String(p.turnId),
+    itemId: String(p.itemId ?? ""),
+  };
+  if (request.method === "item/commandExecution/requestApproval") {
+    dispatch({
+      type: "APPROVAL_REQUESTED",
+      threadId: base.threadId,
+      approval: {
+        ...base,
+        kind: "commandExecution",
+        command: p.command as string | undefined,
+        cwd: p.cwd as string | undefined,
+        reason: p.reason as string | null | undefined,
+        // Carried through so the card can show, and echo back verbatim, what
+        // the server actually proposed (never a synthesized amendment).
+        proposedExecpolicyAmendment:
+          p.proposedExecpolicyAmendment as PendingCommandExecutionApproval["proposedExecpolicyAmendment"],
+        proposedNetworkPolicyAmendments:
+          p.proposedNetworkPolicyAmendments as PendingCommandExecutionApproval["proposedNetworkPolicyAmendments"],
+        availableDecisions:
+          p.availableDecisions as PendingCommandExecutionApproval["availableDecisions"],
+      },
+    });
+  } else if (request.method === "item/fileChange/requestApproval") {
+    dispatch({
+      type: "APPROVAL_REQUESTED",
+      threadId: base.threadId,
+      approval: {
+        ...base,
+        kind: "fileChange",
+        reason: p.reason as string | null | undefined,
+        grantRoot: p.grantRoot as string | null | undefined,
+      },
+    });
+  } else if (request.method === "item/permissions/requestApproval") {
+    dispatch({
+      type: "APPROVAL_REQUESTED",
+      threadId: base.threadId,
+      approval: {
+        ...base,
+        kind: "permissions",
+        reason: p.reason as string | null | undefined,
+        cwd: p.cwd as string | undefined,
+        // The whole point of the permissions card: show what's requested.
+        permissions: p.permissions as PendingPermissionsApproval["permissions"],
+      },
+    });
+  }
+}
+
+function tracingWarn(message: string) {
+  // eslint-disable-next-line no-console
+  console.warn(message);
+}

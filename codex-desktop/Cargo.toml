@@ -1,0 +1,43 @@
+[package]
+name = "codex-desktop"
+# Cargo can't auto-discover the workspace root by walking up parent
+# directories here, since this crate is a sibling of `codex-rs/`, not nested
+# under it (ADR-0011) — point at it explicitly.
+workspace = "../codex-rs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "codex-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+anyhow = { workspace = true }
+codex-app-server-client = { workspace = true }
+codex-app-server-protocol = { workspace = true }
+codex-arg0 = { workspace = true }
+codex-config = { workspace = true }
+codex-core = { workspace = true }
+codex-exec-server = { workspace = true }
+codex-utils-approval-presets = { workspace = true }
+codex-feedback = { workspace = true }
+codex-protocol = { workspace = true }
+codex-utils-home-dir = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

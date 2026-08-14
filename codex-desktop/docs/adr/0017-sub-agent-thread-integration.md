@@ -1,0 +1,8 @@
+# Sub-agent threads stay out of the Project sidebar by default; drill-in uses existing thread filters
+
+Resolves the open follow-up from ADR-0014. Two facts from `app-server-protocol/src/protocol/v2/thread.rs` settle this without new design work:
+
+1. `ThreadListParams.source_kinds` is documented as: "when omitted or empty, defaults to interactive sources." `ThreadSourceKind` includes `SubAgent`/`SubAgentReview`/`SubAgentCompact`/`SubAgentThreadSpawn`/`SubAgentOther` as distinct kinds from `Cli`/`VsCode`/`Exec`/`AppServer`. As long as Codex Desktop's Project-grouping `thread/list` calls leave `source_kinds` unset (the default), sub-agent threads are already excluded from the top-level Project sidebar — no client-side filtering needed.
+2. `ThreadListParams` has `parent_thread_id` and `ancestor_thread_id` filters (both marked `#[experimental]`) purpose-built for "list descendants of thread X." Combined with the `sender_thread_id`/`receiver_thread_ids` already on `CollabAgentToolCall` and `agent_thread_id` on `SubAgentActivity`, drilling from a sub-agent item in the parent stream into that sub-agent's own thread is a direct `thread/read`/`thread/list{ancestorThreadId}` call — no new protocol surface needed.
+
+**Consequences:** Codex Desktop must opt in to `experimental_api: true` on its `InitializeClientStartArgs` (already true per the scaffold's `main.rs`) to use `parentThreadId`/`ancestorThreadId`. The actual drill-in UI (does clicking a sub-agent item open a nested panel, a new tab, navigate the main pane?) is still an open UI-design question, but it's a rendering question now, not a data-availability question.

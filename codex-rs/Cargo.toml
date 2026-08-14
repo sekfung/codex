@@ -36,6 +36,7 @@ members = [
     "connectors",
     "config",
     "context-fragments",
+    "../codex-desktop",
     "shell-command",
     "shell-escalation",
     "skills",
