@@ -5,6 +5,7 @@ import { ThemeProvider } from "./useTheme";
 import { Sidebar } from "./components/Sidebar";
 import { ChatStream } from "./components/ChatStream";
 import { Composer } from "./components/Composer";
+import { UsageNotice } from "./components/UsageNotice";
 import { SettingsShell } from "./components/settings/SettingsShell";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
@@ -25,6 +26,7 @@ function MainPane() {
   return (
     <main className="flex min-w-0 flex-1 flex-col">
       <ChatStream threadId={threadId} />
+      <UsageNotice />
       <Composer threadId={threadId} />
     </main>
   );

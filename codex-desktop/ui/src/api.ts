@@ -6,11 +6,15 @@ import type {
   ApprovalMode,
   ConfigReadResponse,
   ConfigRequirementsReadResponse,
+  GetAccountRateLimitsResponse,
+  GetAccountResponse,
   ModelListResponse,
   Project,
   ReasoningEffort,
   SettingEdit,
+  ThreadListResponse,
   ThreadResumeResponse,
+  ThreadSearchResponse,
 } from "./types";
 
 /// `thread/fork` returns the same envelope shape as resume, plus more fields
@@ -38,8 +42,30 @@ export const pickProjectFolder = () => open({ directory: true, multiple: false }
 
 // -- Threads ------------------------------------------------------------
 
-export const listThreads = (projectPath: string) =>
-  invoke<unknown>("list_threads", { projectPath });
+/// `archived` is the protocol's tri-state: `true` returns *only* archived
+/// threads, `false`/`null` only non-archived. There is no "both", so the
+/// archived view is a second call rather than a filter over one result.
+export const listThreads = (projectPath: string, archived?: boolean) =>
+  invoke<ThreadListResponse>("list_threads", { projectPath, archived: archived ?? null });
+
+export const setThreadName = (threadId: string, name: string) =>
+  invoke<unknown>("set_thread_name", { threadId, name });
+export const archiveThread = (threadId: string) =>
+  invoke<unknown>("archive_thread", { threadId });
+export const unarchiveThread = (threadId: string) =>
+  invoke<unknown>("unarchive_thread", { threadId });
+export const deleteThread = (threadId: string) =>
+  invoke<unknown>("delete_thread", { threadId });
+
+/// Searches across every Project — `thread/search` has no cwd filter.
+export const searchThreads = (searchTerm: string, limit?: number) =>
+  invoke<ThreadSearchResponse>("search_threads", { searchTerm, limit: limit ?? null });
+
+// -- Account (read-only: no billing, upgrade or top-up path exists) ----------
+
+export const readAccount = () => invoke<GetAccountResponse>("read_account");
+export const readAccountRateLimits = () =>
+  invoke<GetAccountRateLimitsResponse>("read_account_rate_limits");
 export const startThread = (
   cwd: string,
   approvalMode?: ApprovalMode,

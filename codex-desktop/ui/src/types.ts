@@ -128,6 +128,109 @@ export interface ThreadResumeResponse {
   thread: { id: string; turns?: Turn[] };
 }
 
+// -- Thread list / search ---------------------------------------------------
+
+/// The subset of `v2::Thread` the sidebar reads. `thread/list` and
+/// `thread/search` both return full `Thread` objects; everything not named
+/// here is ignored rather than guessed at.
+export interface ThreadSummary {
+  id: string;
+  /// User-assigned title (`thread/name/set`). Null until someone names it,
+  /// which is why `preview` is the fallback.
+  name?: string | null;
+  /// Usually the thread's first user message.
+  preview?: string;
+  cwd?: string;
+  updatedAt?: number;
+  recencyAt?: number | null;
+}
+
+export interface ThreadListResponse {
+  data: ThreadSummary[];
+  nextCursor?: string | null;
+}
+
+/// `thread/search` returns each hit wrapped with the matching excerpt.
+export interface ThreadSearchResult {
+  thread: ThreadSummary;
+  snippet: string;
+}
+
+export interface ThreadSearchResponse {
+  data: ThreadSearchResult[];
+  nextCursor?: string | null;
+}
+
+/// What the sidebar shows for a thread: an explicit name wins, then the
+/// first-message preview, then a placeholder. Kept here so the list, the
+/// search results and the rename dialog can't disagree about it.
+export function threadTitle(thread: ThreadSummary): string {
+  return thread.name?.trim() || thread.preview?.trim() || "(未命名)";
+}
+
+// -- Account (read-only; no billing/upgrade surface anywhere) ----------------
+// `v2::Account` is `#[serde(tag = "type")]` over three auth kinds.
+
+export type PlanType =
+  | "free"
+  | "go"
+  | "plus"
+  | "pro"
+  | "pro_lite"
+  | "team"
+  | "business"
+  | "enterprise"
+  | string;
+
+export type Account =
+  | { type: "apiKey" }
+  | { type: "chatgpt"; email?: string | null; planType: PlanType }
+  | { type: "amazonBedrock"; usesCodexManagedCredentials?: boolean };
+
+export interface GetAccountResponse {
+  account?: Account | null;
+  requiresOpenaiAuth: boolean;
+}
+
+export interface RateLimitWindow {
+  usedPercent: number;
+  windowDurationMins?: number | null;
+  /// Unix **seconds** (`resets_at` on the Rust side), not milliseconds.
+  resetsAt?: number | null;
+}
+
+export interface CreditsSnapshot {
+  hasCredits: boolean;
+  unlimited: boolean;
+  balance?: string | null;
+}
+
+/// Why the backend says usage is blocked. Reported by the server — this app
+/// never derives exhaustion from a percentage threshold of its own.
+export type RateLimitReachedType =
+  | "rateLimitReached"
+  | "workspaceOwnerCreditsDepleted"
+  | "workspaceMemberCreditsDepleted"
+  | "workspaceOwnerUsageLimitReached"
+  | "workspaceMemberUsageLimitReached";
+
+export interface RateLimitSnapshot {
+  limitId?: string | null;
+  limitName?: string | null;
+  primary?: RateLimitWindow | null;
+  secondary?: RateLimitWindow | null;
+  credits?: CreditsSnapshot | null;
+  /// `null` means "unavailable", not "false" — see the Rust doc comment.
+  spendControlReached?: boolean | null;
+  planType?: PlanType | null;
+  rateLimitReachedType?: RateLimitReachedType | null;
+}
+
+export interface GetAccountRateLimitsResponse {
+  rateLimits: RateLimitSnapshot;
+  rateLimitsByLimitId?: Record<string, RateLimitSnapshot> | null;
+}
+
 // -- Model picker (same two-layer pattern as the approval selector) ----------
 // `Model` / `ReasoningEffortOption` (v2/model.rs). `ReasoningEffort` is a
 // plain string on the wire (its Rust enum has hand-written Serialize/Deserialize

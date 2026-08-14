@@ -10,6 +10,7 @@ import {
 import type { ReactNode } from "react";
 import * as api from "./api";
 import type {
+  Account,
   AppServerEventEnvelope,
   ApprovalMode,
   CodexConfig,
@@ -22,8 +23,11 @@ import type {
   PendingCommandExecutionApproval,
   PendingPermissionsApproval,
   Project,
+  RateLimitSnapshot,
   SettingEdit,
   ThreadItem,
+  ThreadSearchResult,
+  ThreadSummary,
   Turn,
   TurnStatus,
 } from "./types";
@@ -69,10 +73,35 @@ function emptyThread(): ThreadState {
   };
 }
 
+/// Sidebar search is a *mode*, not a filter over the Project tree: while it's
+/// active the tree is replaced by results, and exiting restores it untouched.
+/// `thread/search` has no cwd filter, so results span every Project.
+interface SearchState {
+  term: string;
+  status: "idle" | "searching" | "done" | "error";
+  results: ThreadSearchResult[];
+  error: string | null;
+}
+
 interface State {
   projects: Project[];
   activeProjectPath: string | null;
-  threadsByProject: Record<string, unknown[]>; // raw ThreadListResponse.data, unmapped
+  threadsByProject: Record<string, ThreadSummary[]>;
+  /// Archived threads are a *separate* list call: the protocol's `archived`
+  /// filter is tri-state (`true` = only archived, `false`/null = only
+  /// non-archived), with no way to ask for both at once.
+  archivedThreadsByProject: Record<string, ThreadSummary[]>;
+  /// Which Projects have their archived section expanded. Without this the
+  /// `thread/unarchive` RPC would be unreachable from the UI, making archive
+  /// a one-way trip — so the archived view exists precisely to keep the
+  /// action reversible.
+  archivedVisible: Record<string, boolean>;
+  search: SearchState;
+  /// Read-only account state. There is deliberately no billing, upgrade or
+  /// top-up affordance anywhere in this app, so nothing writes these.
+  account: Account | null;
+  requiresOpenaiAuth: boolean;
+  rateLimits: RateLimitSnapshot | null;
   activeThreadId: string | null;
   threads: Record<string, ThreadState>;
   /// ADR-0016 layer 1. Held app-level rather than per-thread so switching
@@ -116,7 +145,25 @@ type Action =
   | { type: "PROJECT_ADDED"; project: Project }
   | { type: "PROJECT_REMOVED"; id: string }
   | { type: "ACTIVE_PROJECT_SET"; path: string | null }
-  | { type: "THREADS_LOADED"; projectPath: string; threads: unknown[] }
+  | {
+      type: "THREADS_LOADED";
+      projectPath: string;
+      threads: ThreadSummary[];
+      archived: boolean;
+    }
+  | { type: "ARCHIVED_VISIBILITY_SET"; projectPath: string; visible: boolean }
+  | { type: "THREAD_RENAMED"; threadId: string; name: string | null }
+  | { type: "THREAD_REMOVED_FROM_LIST"; threadId: string }
+  | { type: "THREAD_REMOVED_FROM_ARCHIVE"; threadId: string }
+  | { type: "SEARCH_TERM_SET"; term: string }
+  | { type: "SEARCH_STARTED" }
+  | { type: "SEARCH_SUCCEEDED"; results: ThreadSearchResult[] }
+  | { type: "SEARCH_FAILED"; error: string }
+  | { type: "SEARCH_EXITED" }
+  | { type: "ACCOUNT_LOADED"; account: Account | null; requiresOpenaiAuth: boolean }
+  | { type: "ACCOUNT_PLAN_UPDATED"; planType: string | null }
+  | { type: "RATE_LIMITS_LOADED"; rateLimits: RateLimitSnapshot }
+  | { type: "RATE_LIMITS_MERGED"; rateLimits: RateLimitSnapshot }
   | { type: "ACTIVE_THREAD_SET"; threadId: string | null }
   | { type: "ITEM_UPSERT_DELTA"; threadId: string; turnId: string; itemId: string; deltaText: string }
   | {
@@ -158,6 +205,48 @@ function withThread(state: State, threadId: string, update: (thread: ThreadState
   return { ...state, threads: { ...state.threads, [threadId]: update(current) } };
 }
 
+function emptySearch(): SearchState {
+  return { term: "", status: "idle", results: [], error: null };
+}
+
+/// Applies a per-thread transform across every Project's list. Notifications
+/// carry only a `threadId`, never the Project it belongs to, so any update
+/// has to sweep all of them.
+function mapThreadLists(
+  lists: Record<string, ThreadSummary[]>,
+  update: (thread: ThreadSummary) => ThreadSummary,
+): Record<string, ThreadSummary[]> {
+  return Object.fromEntries(
+    Object.entries(lists).map(([path, threads]) => [path, threads.map(update)]),
+  );
+}
+
+function mapThreadListsWhole(
+  lists: Record<string, ThreadSummary[]>,
+  update: (threads: ThreadSummary[]) => ThreadSummary[],
+): Record<string, ThreadSummary[]> {
+  return Object.fromEntries(
+    Object.entries(lists).map(([path, threads]) => [path, update(threads)]),
+  );
+}
+
+/// Merges a sparse rolling rate-limit update over the last full snapshot.
+/// Only `rate_limits` itself is non-optional on the notification; every field
+/// inside it may be absent, and absent means "unchanged".
+function mergeRateLimits(
+  previous: RateLimitSnapshot | null,
+  update: RateLimitSnapshot,
+): RateLimitSnapshot {
+  if (!previous) return update;
+  const merged: RateLimitSnapshot = { ...previous };
+  for (const [key, value] of Object.entries(update)) {
+    if (value !== null && value !== undefined) {
+      (merged as Record<string, unknown>)[key] = value;
+    }
+  }
+  return merged;
+}
+
 function reducer(state: State, action: Action): State {
   switch (action.type) {
     case "PROJECTS_LOADED":
@@ -169,10 +258,101 @@ function reducer(state: State, action: Action): State {
     case "ACTIVE_PROJECT_SET":
       return { ...state, activeProjectPath: action.path };
     case "THREADS_LOADED":
+      return action.archived
+        ? {
+            ...state,
+            archivedThreadsByProject: {
+              ...state.archivedThreadsByProject,
+              [action.projectPath]: action.threads,
+            },
+          }
+        : {
+            ...state,
+            threadsByProject: { ...state.threadsByProject, [action.projectPath]: action.threads },
+          };
+    case "ARCHIVED_VISIBILITY_SET":
       return {
         ...state,
-        threadsByProject: { ...state.threadsByProject, [action.projectPath]: action.threads },
+        archivedVisible: { ...state.archivedVisible, [action.projectPath]: action.visible },
       };
+    case "THREAD_RENAMED": {
+      // Applied everywhere the thread can be on screen at once. The rename may
+      // not have originated here — `thread/name/updated` also fires when the
+      // CLI or another surface renames it.
+      const rename = (thread: ThreadSummary): ThreadSummary =>
+        thread.id === action.threadId ? { ...thread, name: action.name } : thread;
+      return {
+        ...state,
+        threadsByProject: mapThreadLists(state.threadsByProject, rename),
+        archivedThreadsByProject: mapThreadLists(state.archivedThreadsByProject, rename),
+        search: {
+          ...state.search,
+          results: state.search.results.map((result) =>
+            result.thread.id === action.threadId
+              ? { ...result, thread: rename(result.thread) }
+              : result,
+          ),
+        },
+      };
+    }
+    case "THREAD_REMOVED_FROM_LIST": {
+      // Covers both archive and delete: either way the thread leaves the
+      // default (non-archived) list. Search results drop it too, since they
+      // are also a non-archived view.
+      const drop = (threads: ThreadSummary[]) =>
+        threads.filter((thread) => thread.id !== action.threadId);
+      return {
+        ...state,
+        threadsByProject: mapThreadListsWhole(state.threadsByProject, drop),
+        search: {
+          ...state.search,
+          results: state.search.results.filter((result) => result.thread.id !== action.threadId),
+        },
+        // A thread that no longer exists must not stay open in the main pane.
+        activeThreadId: state.activeThreadId === action.threadId ? null : state.activeThreadId,
+      };
+    }
+    case "THREAD_REMOVED_FROM_ARCHIVE":
+      return {
+        ...state,
+        archivedThreadsByProject: mapThreadListsWhole(
+          state.archivedThreadsByProject,
+          (threads) => threads.filter((thread) => thread.id !== action.threadId),
+        ),
+      };
+    case "SEARCH_TERM_SET":
+      return { ...state, search: { ...state.search, term: action.term } };
+    case "SEARCH_STARTED":
+      return { ...state, search: { ...state.search, status: "searching", error: null } };
+    case "SEARCH_SUCCEEDED":
+      return {
+        ...state,
+        search: { ...state.search, status: "done", results: action.results, error: null },
+      };
+    case "SEARCH_FAILED":
+      return {
+        ...state,
+        search: { ...state.search, status: "error", results: [], error: action.error },
+      };
+    case "SEARCH_EXITED":
+      return { ...state, search: emptySearch() };
+    case "ACCOUNT_LOADED":
+      return {
+        ...state,
+        account: action.account,
+        requiresOpenaiAuth: action.requiresOpenaiAuth,
+      };
+    case "ACCOUNT_PLAN_UPDATED":
+      // `account/updated` is sparse — it carries authMode/planType but never
+      // the email, so this merges rather than replacing the account.
+      if (!state.account || state.account.type !== "chatgpt" || !action.planType) return state;
+      return { ...state, account: { ...state.account, planType: action.planType } };
+    case "RATE_LIMITS_LOADED":
+      return { ...state, rateLimits: action.rateLimits };
+    case "RATE_LIMITS_MERGED":
+      // The protocol documents `account/rateLimits/updated` as a *sparse
+      // rolling update*: absent fields mean "unchanged", not "cleared".
+      return { ...state, rateLimits: mergeRateLimits(state.rateLimits, action.rateLimits) };
     case "ACTIVE_THREAD_SET":
       return { ...state, activeThreadId: action.threadId };
     case "ITEM_UPSERT_DELTA":
@@ -397,6 +577,12 @@ const initialState: State = {
   projects: [],
   activeProjectPath: null,
   threadsByProject: {},
+  archivedThreadsByProject: {},
+  archivedVisible: {},
+  search: emptySearch(),
+  account: null,
+  requiresOpenaiAuth: false,
+  rateLimits: null,
   activeThreadId: null,
   threads: {},
   // Matches the Official App's default selection in the reference
@@ -426,6 +612,16 @@ interface StoreValue {
   startNewThread: (cwd: string) => Promise<void>;
   sendMessage: (threadId: string, text: string) => Promise<void>;
   forkThreadFromTurn: (threadId: string, turnId: string) => Promise<void>;
+  /// Thread management. Each is a thin call onto a `thread/*` RPC (ADR-0021);
+  /// the resulting list changes arrive as server notifications rather than
+  /// being assumed locally.
+  renameThread: (threadId: string, name: string) => Promise<void>;
+  archiveThread: (threadId: string) => Promise<void>;
+  unarchiveThread: (threadId: string) => Promise<void>;
+  deleteThread: (threadId: string) => Promise<void>;
+  setArchivedVisible: (projectPath: string, visible: boolean) => Promise<void>;
+  setSearchTerm: (term: string) => void;
+  exitSearch: () => void;
   setApprovalMode: (mode: ApprovalMode) => Promise<void>;
   setModelSelection: (selection: ModelSelection) => Promise<void>;
   interruptActiveTurn: (threadId: string) => Promise<void>;
@@ -518,20 +714,83 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       .catch((error) => tracingWarn(`configRequirements/read failed: ${String(error)}`));
   }, [reloadConfig]);
 
+  /// Read-only account state for the sidebar footer. A failure here leaves the
+  /// footer showing nothing identifying rather than blocking the app — being
+  /// signed in is not a precondition for the UI to render.
+  const refetchAccount = useCallback(() => {
+    api
+      .readAccount()
+      .then((response) =>
+        dispatch({
+          type: "ACCOUNT_LOADED",
+          account: response.account ?? null,
+          requiresOpenaiAuth: response.requiresOpenaiAuth ?? false,
+        }),
+      )
+      .catch((error) => tracingWarn(`account/read failed: ${String(error)}`));
+  }, []);
+
   useEffect(() => {
     let unlisten: (() => void) | undefined;
-    api.onAppServerEvent((envelope) => handleEvent(envelope, dispatch)).then((fn) => {
-      unlisten = fn;
-    });
+    api
+      .onAppServerEvent((envelope) => handleEvent(envelope, dispatch, { refetchAccount }))
+      .then((fn) => {
+        unlisten = fn;
+      });
     return () => unlisten?.();
-  }, []);
+  }, [refetchAccount]);
+
+  useEffect(() => {
+    refetchAccount();
+    api
+      .readAccountRateLimits()
+      .then((response) =>
+        dispatch({ type: "RATE_LIMITS_LOADED", rateLimits: response.rateLimits }),
+      )
+      .catch((error) => tracingWarn(`account/rateLimits/read failed: ${String(error)}`));
+  }, [refetchAccount]);
+
+  // Debounced search. Runs off the committed term rather than per keystroke,
+  // and a stale in-flight response is discarded so fast typing can't let an
+  // earlier query overwrite a later one.
+  const searchTerm = state.search.term;
+  useEffect(() => {
+    const term = searchTerm.trim();
+    if (!term) {
+      dispatch({ type: "SEARCH_SUCCEEDED", results: [] });
+      return;
+    }
+    let cancelled = false;
+    dispatch({ type: "SEARCH_STARTED" });
+    const timer = setTimeout(() => {
+      api
+        .searchThreads(term, 40)
+        .then((response) => {
+          if (!cancelled) {
+            dispatch({ type: "SEARCH_SUCCEEDED", results: response.data ?? [] });
+          }
+        })
+        .catch((error) => {
+          if (!cancelled) dispatch({ type: "SEARCH_FAILED", error: String(error) });
+        });
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [searchTerm]);
 
   const setActiveProject = useCallback(async (path: string | null) => {
     dispatch({ type: "ACTIVE_PROJECT_SET", path });
     dispatch({ type: "ACTIVE_THREAD_SET", threadId: null });
     if (!path) return;
-    const response = (await api.listThreads(path)) as { data?: unknown[] };
-    dispatch({ type: "THREADS_LOADED", projectPath: path, threads: response.data ?? [] });
+    const response = await api.listThreads(path);
+    dispatch({
+      type: "THREADS_LOADED",
+      projectPath: path,
+      threads: response.data ?? [],
+      archived: false,
+    });
   }, []);
 
   // Threads picked from the sidebar have no items in this store yet — the
@@ -587,8 +846,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     dispatch({ type: "HISTORY_LOADED", threadId, turns: [] });
     const path = activeProjectPathRef.current;
     if (path) {
-      const list = (await api.listThreads(path)) as { data?: unknown[] };
-      dispatch({ type: "THREADS_LOADED", projectPath: path, threads: list.data ?? [] });
+      const list = await api.listThreads(path);
+      dispatch({
+        type: "THREADS_LOADED",
+        projectPath: path,
+        threads: list.data ?? [],
+        archived: false,
+      });
     }
   }, []);
 
@@ -606,9 +870,74 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     dispatch({ type: "HISTORY_LOADED", threadId: forkedId, turns: response.thread?.turns ?? [] });
     const path = activeProjectPathRef.current;
     if (path) {
-      const list = (await api.listThreads(path)) as { data?: unknown[] };
-      dispatch({ type: "THREADS_LOADED", projectPath: path, threads: list.data ?? [] });
+      const list = await api.listThreads(path);
+      dispatch({
+        type: "THREADS_LOADED",
+        projectPath: path,
+        threads: list.data ?? [],
+        archived: false,
+      });
     }
+  }, []);
+
+  // --- Thread management (all via `thread/*` RPCs — ADR-0021) ---------------
+  //
+  // These deliberately do not patch the sidebar optimistically. The server
+  // broadcasts `thread/name/updated` / `thread/archived` / `thread/deleted`
+  // for every one of them, and letting that notification be the single source
+  // of the list update means a change made from the CLI lands identically to
+  // one made here.
+
+  const renameThread = useCallback(async (threadId: string, name: string) => {
+    await api.setThreadName(threadId, name);
+  }, []);
+
+  const archiveThread = useCallback(async (threadId: string) => {
+    await api.archiveThread(threadId);
+  }, []);
+
+  const unarchiveThread = useCallback(async (threadId: string) => {
+    await api.unarchiveThread(threadId);
+    // No `thread/unarchived` handler can refresh the *non*-archived list on
+    // its own — it only knows the thread id, not which Project list to add it
+    // back to — so re-list the active Project here.
+    const path = activeProjectPathRef.current;
+    if (path) {
+      const list = await api.listThreads(path);
+      dispatch({
+        type: "THREADS_LOADED",
+        projectPath: path,
+        threads: list.data ?? [],
+        archived: false,
+      });
+    }
+  }, []);
+
+  const deleteThread = useCallback(async (threadId: string) => {
+    await api.deleteThread(threadId);
+  }, []);
+
+  /// Expanding the archived section lazily fetches it — a second `thread/list`
+  /// call, since the protocol's `archived` filter can't return both states at
+  /// once.
+  const setArchivedVisible = useCallback(async (projectPath: string, visible: boolean) => {
+    dispatch({ type: "ARCHIVED_VISIBILITY_SET", projectPath, visible });
+    if (!visible) return;
+    const list = await api.listThreads(projectPath, true);
+    dispatch({
+      type: "THREADS_LOADED",
+      projectPath,
+      threads: list.data ?? [],
+      archived: true,
+    });
+  }, []);
+
+  const setSearchTerm = useCallback((term: string) => {
+    dispatch({ type: "SEARCH_TERM_SET", term });
+  }, []);
+
+  const exitSearch = useCallback(() => {
+    dispatch({ type: "SEARCH_EXITED" });
   }, []);
 
   /// ADR-0016 layer 1, composer side. Applied to the active thread
@@ -678,6 +1007,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       startNewThread,
       sendMessage,
       forkThreadFromTurn,
+      renameThread,
+      archiveThread,
+      unarchiveThread,
+      deleteThread,
+      setArchivedVisible,
+      setSearchTerm,
+      exitSearch,
       setApprovalMode,
       setModelSelection,
       interruptActiveTurn,
@@ -696,6 +1032,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       startNewThread,
       sendMessage,
       forkThreadFromTurn,
+      renameThread,
+      archiveThread,
+      unarchiveThread,
+      deleteThread,
+      setArchivedVisible,
+      setSearchTerm,
+      exitSearch,
       setApprovalMode,
       setModelSelection,
       interruptActiveTurn,
@@ -716,9 +1059,18 @@ export function useStore(): StoreValue {
   return value;
 }
 
-function handleEvent(envelope: AppServerEventEnvelope, dispatch: React.Dispatch<Action>) {
+function handleEvent(
+  envelope: AppServerEventEnvelope,
+  dispatch: React.Dispatch<Action>,
+  effects: NotificationEffects,
+) {
   if (envelope.kind === "notification" && envelope.notification) {
-    handleNotification(envelope.notification.method, envelope.notification.params, dispatch);
+    handleNotification(
+      envelope.notification.method,
+      envelope.notification.params,
+      dispatch,
+      effects,
+    );
   } else if (envelope.kind === "request" && envelope.request) {
     handleServerRequest(envelope.requestId, envelope.request, dispatch);
   } else if (envelope.kind === "disconnected") {
@@ -726,7 +1078,19 @@ function handleEvent(envelope: AppServerEventEnvelope, dispatch: React.Dispatch<
   }
 }
 
-function handleNotification(method: string, params: unknown, dispatch: React.Dispatch<Action>) {
+/// Side effects a notification can trigger beyond a plain dispatch — kept as
+/// an explicit parameter so `handleNotification` stays a pure-ish function
+/// rather than reaching for module-level state.
+interface NotificationEffects {
+  refetchAccount: () => void;
+}
+
+function handleNotification(
+  method: string,
+  params: unknown,
+  dispatch: React.Dispatch<Action>,
+  effects: NotificationEffects,
+) {
   const p = params as Record<string, unknown>;
   if (TEXT_DELTA_METHODS.has(method)) {
     dispatch({
@@ -784,6 +1148,47 @@ function handleNotification(method: string, params: unknown, dispatch: React.Dis
       threadId: String(p.threadId),
       turnId: String(turn?.id ?? ""),
       status,
+    });
+    return;
+  }
+
+  // Thread lifecycle. These are the single source of truth for sidebar list
+  // changes — a rename or archive performed from the CLI arrives here exactly
+  // like one performed in this window (ADR-0021).
+  if (method === "thread/name/updated") {
+    dispatch({
+      type: "THREAD_RENAMED",
+      threadId: String(p.threadId),
+      // The field is optional: absent means the name was cleared.
+      name: typeof p.threadName === "string" ? p.threadName : null,
+    });
+    return;
+  }
+  if (method === "thread/archived" || method === "thread/deleted") {
+    dispatch({ type: "THREAD_REMOVED_FROM_LIST", threadId: String(p.threadId) });
+    return;
+  }
+  if (method === "thread/unarchived") {
+    dispatch({ type: "THREAD_REMOVED_FROM_ARCHIVE", threadId: String(p.threadId) });
+    return;
+  }
+
+  // Account. Read-only: nothing in this app writes account or billing state.
+  if (method === "account/updated") {
+    // The notification carries only `authMode`/`planType` — never the email —
+    // so a plan change can be merged in place, but anything that could have
+    // changed *which* account is signed in has to come from `account/read`.
+    dispatch({
+      type: "ACCOUNT_PLAN_UPDATED",
+      planType: typeof p.planType === "string" ? p.planType : null,
+    });
+    effects.refetchAccount();
+    return;
+  }
+  if (method === "account/rateLimits/updated") {
+    dispatch({
+      type: "RATE_LIMITS_MERGED",
+      rateLimits: p.rateLimits as RateLimitSnapshot,
     });
   }
 }
