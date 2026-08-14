@@ -156,9 +156,9 @@ export function Composer({ threadId }: { threadId: string }) {
   const [pickedSkills, setPickedSkills] = useState<ComposerSkill[]>([]);
   const [skillQuery, setSkillQuery] = useState<{ start: number; query: string } | null>(null);
   const [skillHighlight, setSkillHighlight] = useState(0);
-  /// Files and folders added from the `@` menu's 文件和文件夹 entry. Shown as
-  /// chips beside the image attachments; Rust folds their paths into the text
-  /// on send, because a file reference has no structured `UserInput` variant.
+  /// Paths added from the `@` menu's 文件 / 文件夹 entries. Shown as chips
+  /// beside the image attachments; Rust folds their paths into the text on
+  /// send, because a file reference has no structured `UserInput` variant.
   const [fileRefs, setFileRefs] = useState<ComposerFileRef[]>([]);
   /// `@` file completions. Unlike skills there is no companion structured
   /// item — a picked file becomes plain path text, which is the engine's own
@@ -297,7 +297,7 @@ export function Composer({ threadId }: { threadId: string }) {
     // 添加-section entries are commands, not search results, so they match on
     // their own names rather than being filtered out by a path search.
     const matches = (needles: string) => query === "" || needles.includes(query);
-    if (matches("文件和文件夹filesfolder")) entries.push({ kind: "pickFiles" });
+    if (matches("文件file")) entries.push({ kind: "pickFiles" });
     if (matches("文件夹folder")) entries.push({ kind: "pickFolders" });
     if (matches("目标goal")) entries.push({ kind: "goal" });
     // The TUI refuses to switch collaboration mode mid-turn, so neither do we.
@@ -342,9 +342,10 @@ export function Composer({ threadId }: { threadId: string }) {
     }
   }
 
-  /// 文件和文件夹. Two dialogs rather than one: the dialog plugin's
-  /// `directory` option is a boolean switch between file mode and folder mode,
-  /// with no combined mode.
+  /// Two entries — 文件 and 文件夹 — rather than the Official App's single
+  /// 文件和文件夹: the dialog plugin's `directory` option is a boolean switch
+  /// between file mode and folder mode with no combined mode, so one entry
+  /// would have to promise more than the dialog behind it delivers.
   ///
   /// Picked paths become chips, not text — the Official App's presentation.
   /// Absolute paths are shortened against the Project they came from, matching
@@ -580,11 +581,7 @@ export function Composer({ threadId }: { threadId: string }) {
                       )}
                     >
                       {entry.kind === "pickFiles" ? (
-                        <MentionRow
-                          Icon={Paperclip}
-                          title="文件和文件夹"
-                          hint="从磁盘选择文件"
-                        />
+                        <MentionRow Icon={Paperclip} title="文件" hint="从磁盘选择文件" />
                       ) : entry.kind === "pickFolders" ? (
                         <MentionRow Icon={Folder} title="文件夹" hint="从磁盘选择文件夹" />
                       ) : entry.kind === "goal" ? (
