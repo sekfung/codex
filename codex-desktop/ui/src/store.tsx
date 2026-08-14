@@ -16,7 +16,9 @@ import type {
   BackgroundTerminalView,
   CodexConfig,
   CommandExecutionItem,
+  CollaborationModePreset,
   ComposerAttachment,
+  ComposerFileRef,
   ComposerSkill,
   ConfigLayerMetadata,
   ConfigRequirements,
@@ -183,6 +185,14 @@ interface State {
   modelSelection: ModelSelection;
   /// Composer override tracking, mirroring `approvalModeOverridden`.
   modelSelectionOverridden: boolean;
+  /// Collaboration-mode presets from `collaborationMode/list`, behind the `@`
+  /// menu's 计划模式 entry. Empty until it resolves, or if the experimental
+  /// RPC is unavailable — in which case the entry simply isn't offered.
+  collaborationModes: CollaborationModePreset[];
+  /// The mode applied to the active thread, `"default"` until changed. Kept
+  /// per-app rather than per-thread because a new thread starts in
+  /// `ModeKind::default()` anyway, which is Default.
+  collaborationMode: string;
   /// Live MCP startup state, keyed by server name. `mcpServerStatus/list`
   /// reports auth status but not startup state, so this can only be
   /// accumulated from `mcpServer/startupStatus/updated` — a server that
@@ -254,6 +264,8 @@ type Action =
   | { type: "HISTORY_FAILED"; threadId: string; error: string }
   | { type: "APPROVAL_MODE_SET"; mode: ApprovalMode; overrides: boolean }
   | { type: "MODELS_LOADED"; models: Model[] }
+  | { type: "COLLABORATION_MODES_LOADED"; modes: CollaborationModePreset[] }
+  | { type: "COLLABORATION_MODE_SET"; mode: string }
   | { type: "MODEL_SELECTION_SET"; selection: ModelSelection; overrides: boolean }
   | {
       type: "CONFIG_LOADED";
@@ -639,6 +651,10 @@ function reducer(state: State, action: Action): State {
           : state.modelSelection;
       return { ...state, models: action.models, modelSelection: selection };
     }
+    case "COLLABORATION_MODES_LOADED":
+      return { ...state, collaborationModes: action.modes };
+    case "COLLABORATION_MODE_SET":
+      return { ...state, collaborationMode: action.mode };
     case "MODEL_SELECTION_SET":
       return {
         ...state,
@@ -721,6 +737,8 @@ const initialState: State = {
   // server decide".
   modelSelection: { model: null, effort: null },
   modelSelectionOverridden: false,
+  collaborationModes: [],
+  collaborationMode: "default",
   mcpRuntime: {},
   pendingLogin: null,
   skills: [],
@@ -739,6 +757,7 @@ interface StoreValue {
     text: string,
     attachments?: ComposerAttachment[],
     skills?: ComposerSkill[],
+    fileRefs?: ComposerFileRef[],
   ) => Promise<void>;
   compactThread: (threadId: string) => Promise<void>;
   startReview: (
@@ -757,6 +776,7 @@ interface StoreValue {
     text: string,
     attachments?: ComposerAttachment[],
     skills?: ComposerSkill[],
+    fileRefs?: ComposerFileRef[],
   ) => Promise<void>;
   refetchQueue: (threadId: string) => Promise<void>;
   editQueued: (threadId: string, queuedSubmissionId: string, text: string) => Promise<void>;
@@ -788,6 +808,7 @@ interface StoreValue {
   exitSearch: () => void;
   setApprovalMode: (mode: ApprovalMode) => Promise<void>;
   setModelSelection: (selection: ModelSelection) => Promise<void>;
+  setCollaborationMode: (mode: string) => Promise<void>;
   interruptActiveTurn: (threadId: string) => Promise<void>;
   openSettings: (screen?: string) => void;
   closeSettings: () => void;
@@ -842,6 +863,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const modelSelectionRef = useRef<ModelSelection>(initialState.modelSelection);
   modelSelectionRef.current = state.modelSelection;
+  const collaborationModeRef = useRef<string>(initialState.collaborationMode);
+  collaborationModeRef.current = state.collaborationMode;
   // Read at call time so cancelling targets the login that is actually in
   // flight, not one captured when the callback was created.
   const pendingLoginRef = useRef<PendingLogin | null>(null);
@@ -858,6 +881,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // A missing catalog leaves the picker empty rather than breaking the
       // composer; threads then run at whatever the server defaults to.
       .catch((error) => tracingWarn(`model/list failed: ${String(error)}`));
+  }, []);
+
+  useEffect(() => {
+    api
+      .listCollaborationModes()
+      .then((modes) => dispatch({ type: "COLLABORATION_MODES_LOADED", modes }))
+      // `collaborationMode/list` is experimental. If it is unavailable the `@`
+      // menu simply omits 计划模式 rather than offering a mode it cannot set.
+      .catch((error) => tracingWarn(`collaborationMode/list failed: ${String(error)}`));
   }, []);
 
   /// Loads `config.toml` and seeds the session's approval mode / model from
@@ -1103,8 +1135,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       text: string,
       attachments: ComposerAttachment[] = [],
       skills: ComposerSkill[] = [],
+      fileRefs: ComposerFileRef[] = [],
     ) => {
-      await api.sendTurn(threadId, text, attachments, skills);
+      await api.sendTurn(threadId, text, attachments, skills, fileRefs);
     },
     [],
   );
@@ -1139,8 +1172,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       text: string,
       attachments: ComposerAttachment[] = [],
       skills: ComposerSkill[] = [],
+      fileRefs: ComposerFileRef[] = [],
     ) => {
-      await api.queueAdd(threadId, text, attachments, skills);
+      await api.queueAdd(threadId, text, attachments, skills, fileRefs);
     },
     [],
   );
@@ -1339,6 +1373,31 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (threadId) await api.setModel(threadId, selection.model, selection.effort);
   }, []);
 
+  /// Applies a collaboration mode to the active thread.
+  ///
+  /// The current model/effort go along because the engine's mode is a
+  /// `{ mode, settings }` bundle, not a flag — Rust builds the effective mode
+  /// by applying the preset mask over a base carrying these settings, using
+  /// the engine's own `apply_mask`.
+  ///
+  /// The TUI refuses to switch mode mid-turn ("Cannot switch collaboration
+  /// mode while a turn is running"), so the composer only offers the entry
+  /// when nothing is running; this dispatches optimistically and rolls back if
+  /// the engine rejects it anyway.
+  const setCollaborationMode = useCallback(async (mode: string) => {
+    const threadId = activeThreadIdRef.current;
+    if (!threadId) return;
+    const previous = collaborationModeRef.current;
+    dispatch({ type: "COLLABORATION_MODE_SET", mode });
+    try {
+      const selection = modelSelectionRef.current;
+      await api.setCollaborationMode(threadId, mode, selection.model, selection.effort);
+    } catch (error) {
+      dispatch({ type: "COLLABORATION_MODE_SET", mode: previous });
+      throw error;
+    }
+  }, []);
+
   /// Settings side of the same setting: persists to `config.toml`, then
   /// reloads so the session value follows unless the composer overrode it.
   const setDefaultApprovalMode = useCallback(
@@ -1457,6 +1516,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       exitSearch,
       setApprovalMode,
       setModelSelection,
+      setCollaborationMode,
       interruptActiveTurn,
       openSettings,
       closeSettings,
@@ -1501,6 +1561,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       exitSearch,
       setApprovalMode,
       setModelSelection,
+      setCollaborationMode,
       interruptActiveTurn,
       openSettings,
       closeSettings,

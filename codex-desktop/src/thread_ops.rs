@@ -35,6 +35,7 @@ use uuid::Uuid;
 
 use crate::bridge::AppServerBridge;
 use crate::composer::ComposerAttachment;
+use crate::composer::ComposerFileRef;
 use crate::composer::ComposerSkill;
 use crate::composer::build_turn_input;
 
@@ -114,13 +115,14 @@ pub async fn queue_add(
     text: String,
     attachments: Vec<ComposerAttachment>,
     skills: Vec<ComposerSkill>,
+    file_refs: Vec<ComposerFileRef>,
 ) -> CmdResult<JsonValue> {
     bridge
         .request(ClientRequest::ThreadQueueAdd {
             request_id: bridge.next_request_id(),
             params: ThreadQueueAddParams {
                 thread_id,
-                input: build_turn_input(text, attachments, skills),
+                input: build_turn_input(text, attachments, skills, file_refs),
                 // Required by the API. The engine would mint one itself if it
                 // were absent, but the wire type is not optional.
                 client_user_message_id: Uuid::now_v7().to_string(),
@@ -171,7 +173,7 @@ pub async fn queue_update(
             params: ThreadQueueUpdateParams {
                 thread_id,
                 queued_submission_id,
-                input: build_turn_input(text, Vec::new(), Vec::new()),
+                input: build_turn_input(text, Vec::new(), Vec::new(), Vec::new()),
             },
         })
         .await
@@ -459,6 +461,7 @@ mod tests {
                     name: "review".to_string(),
                     path: PathBuf::from("/skills/review"),
                 }],
+                Vec::new(),
             ),
         });
 

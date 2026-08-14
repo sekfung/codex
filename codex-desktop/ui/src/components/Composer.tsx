@@ -7,6 +7,7 @@ import {
   FileText,
   Folder,
   Hand,
+  Lightbulb,
   ListPlus,
   Loader2,
   Paperclip,
@@ -22,6 +23,7 @@ import * as api from "../api";
 import type {
   ApprovalMode,
   ComposerAttachment,
+  ComposerFileRef,
   ComposerSkill,
   FileSearchHit,
   ModelSelection,
@@ -112,6 +114,28 @@ function activeMentionQuery(
   return { start, query };
 }
 
+/// One 添加-section row in the `@` menu: icon, name, one-line description —
+/// the shape the Official App uses for these entries.
+function MentionRow({
+  Icon,
+  title,
+  hint,
+}: {
+  Icon: typeof Target;
+  title: string;
+  hint: string;
+}) {
+  return (
+    <>
+      <Icon className="size-3.5 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[13px] font-medium">{title}</span>
+        <span className="block truncate text-xs text-muted-foreground">{hint}</span>
+      </span>
+    </>
+  );
+}
+
 // ADR-0016 layer 1: a persistent mode selector, separate from the per-item
 // approval cards in ChatStream.
 export function Composer({ threadId }: { threadId: string }) {
@@ -121,6 +145,7 @@ export function Composer({ threadId }: { threadId: string }) {
     queueMessage,
     setApprovalMode,
     setModelSelection,
+    setCollaborationMode,
     interruptActiveTurn,
   } = useStore();
   const [goalEditorOpen, setGoalEditorOpen] = useState(false);
@@ -131,6 +156,10 @@ export function Composer({ threadId }: { threadId: string }) {
   const [pickedSkills, setPickedSkills] = useState<ComposerSkill[]>([]);
   const [skillQuery, setSkillQuery] = useState<{ start: number; query: string } | null>(null);
   const [skillHighlight, setSkillHighlight] = useState(0);
+  /// Files and folders added from the `@` menu's 文件和文件夹 entry. Shown as
+  /// chips beside the image attachments; Rust folds their paths into the text
+  /// on send, because a file reference has no structured `UserInput` variant.
+  const [fileRefs, setFileRefs] = useState<ComposerFileRef[]>([]);
   /// `@` file completions. Unlike skills there is no companion structured
   /// item — a picked file becomes plain path text, which is the engine's own
   /// model (see `file_mentions_are_text_only` in `src/composer.rs`).
@@ -242,22 +271,42 @@ export function Composer({ threadId }: { threadId: string }) {
   /// Goal and file results share one flat list so arrow keys move through the
   /// menu as a whole rather than through two lists that each think they own
   /// the caret.
-  type MentionEntry = { kind: "goal" } | { kind: "file"; hit: FileSearchHit };
+  type MentionEntry =
+    | { kind: "pickFiles" }
+    | { kind: "pickFolders" }
+    | { kind: "goal" }
+    | { kind: "plan" }
+    | { kind: "file"; hit: FileSearchHit };
+
+  /// Whether 计划模式 can be offered at all.
+  ///
+  /// Gated on the engine actually reporting a `plan` preset from
+  /// `collaborationMode/list` rather than on a hardcoded name: the RPC is
+  /// experimental, and offering a mode this build cannot set would be exactly
+  /// the faked control ADR-0021 forbids.
+  const planPreset = useMemo(
+    () => state.collaborationModes.find((preset) => preset.mode === "plan" && preset.visible),
+    [state.collaborationModes],
+  );
+  const planActive = state.collaborationMode === "plan";
 
   const mentionEntries: MentionEntry[] = useMemo(() => {
     if (!fileQuery) return [];
     const query = fileQuery.query.toLowerCase();
     const entries: MentionEntry[] = [];
-    // The goal entry is a command, not a search result, so it matches on its
-    // own name rather than being filtered out by a path search.
-    if (query === "" || "目标goal".includes(query)) {
-      entries.push({ kind: "goal" });
-    }
+    // 添加-section entries are commands, not search results, so they match on
+    // their own names rather than being filtered out by a path search.
+    const matches = (needles: string) => query === "" || needles.includes(query);
+    if (matches("文件和文件夹filesfolder")) entries.push({ kind: "pickFiles" });
+    if (matches("文件夹folder")) entries.push({ kind: "pickFolders" });
+    if (matches("目标goal")) entries.push({ kind: "goal" });
+    // The TUI refuses to switch collaboration mode mid-turn, so neither do we.
+    if (planPreset && !turnRunning && matches("计划模式plan")) entries.push({ kind: "plan" });
     for (const hit of fileMatches) {
       entries.push({ kind: "file", hit });
     }
     return entries;
-  }, [fileQuery, fileMatches]);
+  }, [fileQuery, fileMatches, planPreset, turnRunning]);
 
   /// Removes the `@token` the menu was triggered from, without inserting
   /// anything — used when the chosen entry opens a panel instead of producing
@@ -271,12 +320,66 @@ export function Composer({ threadId }: { threadId: string }) {
   }
 
   function chooseMentionEntry(entry: MentionEntry) {
-    if (entry.kind === "goal") {
-      consumeMentionToken();
-      setGoalEditorOpen(true);
-      return;
+    switch (entry.kind) {
+      case "goal":
+        consumeMentionToken();
+        setGoalEditorOpen(true);
+        return;
+      case "plan":
+        consumeMentionToken();
+        void handlePlanToggle();
+        return;
+      case "pickFiles":
+        consumeMentionToken();
+        void handlePickPaths("files");
+        return;
+      case "pickFolders":
+        consumeMentionToken();
+        void handlePickPaths("folders");
+        return;
+      case "file":
+        chooseFile(entry.hit);
     }
-    chooseFile(entry.hit);
+  }
+
+  /// 文件和文件夹. Two dialogs rather than one: the dialog plugin's
+  /// `directory` option is a boolean switch between file mode and folder mode,
+  /// with no combined mode.
+  ///
+  /// Picked paths become chips, not text — the Official App's presentation.
+  /// Absolute paths are shortened against the Project they came from, matching
+  /// what the `@` typeahead inserts (`fuzzyFileSearch` returns paths relative
+  /// to their root).
+  async function handlePickPaths(what: "files" | "folders") {
+    const picked = what === "files" ? await api.pickAnyFiles() : await api.pickAnyFolders();
+    if (!picked) return;
+    const paths = (Array.isArray(picked) ? picked : [picked]).map(relativeToProject);
+    setFileRefs((current) => [
+      ...current,
+      ...paths
+        .filter((path) => !current.some((entry) => entry.path === path))
+        .map((path) => ({ path })),
+    ]);
+    queueMicrotask(() => textareaRef.current?.focus());
+  }
+
+  function relativeToProject(path: string): string {
+    for (const root of searchRoots) {
+      const prefix = root.endsWith("/") || root.endsWith("\\") ? root : `${root}/`;
+      if (path.startsWith(prefix)) return path.slice(prefix.length);
+    }
+    return path;
+  }
+
+  /// 计划模式 is a collaboration mode, not a flag: selecting it applies the
+  /// engine's `plan` preset, and selecting it again returns to `default`.
+  async function handlePlanToggle() {
+    setModeError(null);
+    try {
+      await setCollaborationMode(planActive ? "default" : "plan");
+    } catch (err) {
+      setModeError(String(err));
+    }
   }
 
   function chooseFile(hit: FileSearchHit) {
@@ -329,17 +432,19 @@ export function Composer({ threadId }: { threadId: string }) {
   /// could run a submission twice.
   async function handleSend() {
     const trimmed = text.trim();
-    // An image with no caption is a real message, so attachments alone can send.
-    if ((!trimmed && attachments.length === 0) || sending) return;
+    // An image or a referenced file with no caption is a real message, so
+    // either alone is enough to send.
+    if ((!trimmed && attachments.length === 0 && fileRefs.length === 0) || sending) return;
     setSending(true);
     try {
       if (turnRunning) {
-        await queueMessage(threadId, trimmed, attachments, activeSkills);
+        await queueMessage(threadId, trimmed, attachments, activeSkills, fileRefs);
       } else {
-        await sendMessage(threadId, trimmed, attachments, activeSkills);
+        await sendMessage(threadId, trimmed, attachments, activeSkills, fileRefs);
       }
       setText("");
       setAttachments([]);
+      setFileRefs([]);
       setPickedSkills([]);
       setSkillQuery(null);
       setFileQuery(null);
@@ -434,7 +539,9 @@ export function Composer({ threadId }: { threadId: string }) {
             </div>
           )}
 
-          {fileQuery && mentionEntries.length > 0 && (
+          {/* Rendered whenever `@` is active, even with nothing to offer: the
+              empty state below is the only thing that explains why. */}
+          {fileQuery && (
             <div className="absolute bottom-full left-3 z-20 mb-2 w-96 overflow-hidden rounded-xl border border-border bg-popover p-1 shadow-lg">
               {mentionEntries.map((entry, index) => {
                 const highlighted = index === fileHighlight;
@@ -442,13 +549,19 @@ export function Composer({ threadId }: { threadId: string }) {
                 // so the flat keyboard list and the visual grouping stay in
                 // sync automatically.
                 const header =
-                  entry.kind === "goal"
+                  index === 0
                     ? "添加"
-                    : mentionEntries[index - 1]?.kind !== "file"
+                    : entry.kind === "file" && mentionEntries[index - 1]?.kind !== "file"
                       ? "文件"
                       : null;
                 return (
-                  <div key={entry.kind === "goal" ? "goal" : `${entry.hit.root}/${entry.hit.path}`}>
+                  <div
+                    key={
+                      entry.kind === "file"
+                        ? `${entry.hit.root}/${entry.hit.path}`
+                        : entry.kind
+                    }
+                  >
                     {header && (
                       <div className="px-2 py-1 text-[11px] text-muted-foreground">{header}</div>
                     )}
@@ -466,16 +579,22 @@ export function Composer({ threadId }: { threadId: string }) {
                         highlighted ? "bg-accent" : "hover:bg-accent/60",
                       )}
                     >
-                      {entry.kind === "goal" ? (
-                        <>
-                          <Target className="size-3.5 shrink-0 text-muted-foreground" />
-                          <span className="min-w-0 flex-1">
-                            <span className="block truncate text-[13px] font-medium">目标</span>
-                            <span className="block truncate text-xs text-muted-foreground">
-                              设置要持续追求的目标
-                            </span>
-                          </span>
-                        </>
+                      {entry.kind === "pickFiles" ? (
+                        <MentionRow
+                          Icon={Paperclip}
+                          title="文件和文件夹"
+                          hint="从磁盘选择文件"
+                        />
+                      ) : entry.kind === "pickFolders" ? (
+                        <MentionRow Icon={Folder} title="文件夹" hint="从磁盘选择文件夹" />
+                      ) : entry.kind === "goal" ? (
+                        <MentionRow Icon={Target} title="目标" hint="设置要持续追求的目标" />
+                      ) : entry.kind === "plan" ? (
+                        <MentionRow
+                          Icon={Lightbulb}
+                          title="计划模式"
+                          hint={planActive ? "关闭计划模式" : "开启计划模式"}
+                        />
                       ) : (
                         <>
                           {entry.hit.isDirectory ? (
@@ -497,6 +616,51 @@ export function Composer({ threadId }: { threadId: string }) {
                   </div>
                 );
               })}
+
+              {/* The 文件 header is rendered inline with the first file entry,
+                  so with no matches the section vanishes entirely and the menu
+                  looks like it only ever offers 目标. Say what's going on
+                  instead — the Official App shows the same "输入内容搜索文件"
+                  prompt in this state. */}
+              {fileMatches.length === 0 && (
+                <div>
+                  <div className="px-2 py-1 text-[11px] text-muted-foreground">文件</div>
+                  <div className="px-2 pb-1.5 text-xs text-muted-foreground">
+                    {searchRoots.length === 0
+                      ? "先在侧边栏打开一个项目才能搜索文件"
+                      : fileQuery.query === ""
+                        ? "输入内容搜索文件"
+                        : `没有匹配“${fileQuery.query}”的文件`}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {fileRefs.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 px-3 pt-3">
+              {fileRefs.map((ref, index) => (
+                <span
+                  key={`fileRef-${ref.path}`}
+                  className="flex max-w-[240px] items-center gap-1.5 rounded-md border border-border bg-card px-2 py-1 text-xs"
+                >
+                  <FileText className="size-3 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0">
+                    <span className="block truncate">{ref.path.split(/[/\\]/).pop()}</span>
+                    <span className="block truncate text-[10px] text-muted-foreground">
+                      {ref.path}
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    aria-label="移除文件"
+                    className="shrink-0 text-muted-foreground hover:text-foreground"
+                    onClick={() => setFileRefs((current) => current.filter((_, i) => i !== index))}
+                  >
+                    <X className="size-3" />
+                  </button>
+                </span>
+              ))}
             </div>
           )}
 
@@ -615,6 +779,23 @@ export function Composer({ threadId }: { threadId: string }) {
             >
               <Plus />
             </Button>
+
+            {/* Plan mode is toggled from the `@` menu, so without a visible
+                indicator there would be no way to tell it is on — or to find
+                the way back out. Clicking returns to the default mode. */}
+            {planActive && (
+              <Button
+                variant="ghost"
+                size="xs"
+                className="gap-1.5 text-primary"
+                title="计划模式已开启，点击返回默认模式"
+                disabled={turnRunning}
+                onClick={() => void handlePlanToggle()}
+              >
+                <Lightbulb className="size-3.5" />
+                计划模式
+              </Button>
+            )}
 
             <ReviewLauncher threadId={threadId} />
 
@@ -762,7 +943,9 @@ export function Composer({ threadId }: { threadId: string }) {
               aria-label={turnRunning ? "加入队列" : "发送"}
               title={turnRunning ? "加入队列，当前回合结束后自动执行" : undefined}
               onClick={handleSend}
-              disabled={sending || (!text.trim() && attachments.length === 0)}
+              disabled={
+                sending || (!text.trim() && attachments.length === 0 && fileRefs.length === 0)
+              }
             >
               {sending ? (
                 <Loader2 className="animate-spin" />

@@ -235,6 +235,8 @@ fn main() {
             composer::compact_thread,
             composer::start_review,
             composer::context_usage,
+            composer::list_collaboration_modes,
+            composer::set_collaboration_mode,
             thread_ops::queue_add,
             thread_ops::queue_list,
             thread_ops::queue_update,

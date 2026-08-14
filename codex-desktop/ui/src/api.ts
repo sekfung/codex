@@ -5,7 +5,9 @@ import type {
   AppServerEventEnvelope,
   ApprovalMode,
   BackgroundTerminalView,
+  CollaborationModePreset,
   ComposerAttachment,
+  ComposerFileRef,
   ComposerSkill,
   ConfigReadResponse,
   ConfigRequirementsReadResponse,
@@ -149,15 +151,16 @@ export const openPathInOs = (path: string) => invoke<void>("open_path_in_os", { 
 
 // -- Turns --------------------------------------------------------------
 
-/// Attachments and skills are sent as this app's own flat shapes; Rust
-/// (`src/composer.rs`) maps them onto `UserInput` and orders them the way the
-/// TUI does (images, text, skills).
+/// Attachments, skills and file references are sent as this app's own flat
+/// shapes; Rust (`src/composer.rs`) maps them onto `UserInput`, orders them the
+/// way the TUI does (images, text, skills), and folds `fileRefs` into the text.
 export const sendTurn = (
   threadId: string,
   text: string,
   attachments: ComposerAttachment[] = [],
   skills: ComposerSkill[] = [],
-) => invoke<unknown>("send_turn", { threadId, text, attachments, skills });
+  fileRefs: ComposerFileRef[] = [],
+) => invoke<unknown>("send_turn", { threadId, text, attachments, skills, fileRefs });
 export const interruptTurn = (threadId: string, turnId: string) =>
   invoke<unknown>("interrupt_turn", { threadId, turnId });
 
@@ -181,8 +184,35 @@ export const pickImageFiles = () =>
     filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"] }],
   });
 
+/// The `@` menu's 文件和文件夹 entry.
+///
+/// Two dialogs, not one: `OpenDialogOptions.directory` is a boolean that
+/// switches the dialog between file mode and folder mode, and the plugin
+/// exposes no combined mode (nor do the native pickers underneath it on every
+/// platform). So the menu offers the two as separate entries rather than
+/// pretending one dialog can do both.
+export const pickAnyFiles = () =>
+  open({ title: "选择文件", multiple: true, directory: false });
+
+export const pickAnyFolders = () =>
+  open({ title: "选择文件夹", multiple: true, directory: true });
+
 export const listSkills = (cwds: string[] = [], forceReload = false) =>
   invoke<SkillsListResponse>("list_skills", { cwds, forceReload });
+
+// -- Collaboration mode (`collaborationMode/list`) ---------------------------
+// The engine's model is base-plus-mask, not a flag: a preset is applied on top
+// of an unmasked Default mode via the engine's own `apply_mask`, in Rust.
+
+export const listCollaborationModes = () =>
+  invoke<CollaborationModePreset[]>("list_collaboration_modes");
+
+export const setCollaborationMode = (
+  threadId: string,
+  mode: string,
+  model: string | null,
+  effort: ReasoningEffort | null,
+) => invoke<unknown>("set_collaboration_mode", { threadId, mode, model, effort });
 
 /// `fuzzyFileSearch`, for the composer's `@` completions.
 ///
@@ -296,7 +326,8 @@ export const queueAdd = (
   text: string,
   attachments: ComposerAttachment[] = [],
   skills: ComposerSkill[] = [],
-) => invoke<unknown>("queue_add", { threadId, text, attachments, skills });
+  fileRefs: ComposerFileRef[] = [],
+) => invoke<unknown>("queue_add", { threadId, text, attachments, skills, fileRefs });
 
 export const queueList = (threadId: string) =>
   invoke<QueuedSubmissionView[]>("queue_list", { threadId });

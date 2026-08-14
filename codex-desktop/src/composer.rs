@@ -15,6 +15,8 @@
 //! them onto the protocol.
 
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::CollaborationModeListParams;
+use codex_app_server_protocol::CollaborationModeListResponse;
 use codex_app_server_protocol::FuzzyFileSearchMatchType;
 use codex_app_server_protocol::FuzzyFileSearchParams;
 use codex_app_server_protocol::FuzzyFileSearchResponse;
@@ -23,8 +25,14 @@ use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ReviewTarget;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::ThreadCompactStartParams;
+use codex_app_server_protocol::ThreadSettingsUpdateParams;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::UserInput;
+use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::CollaborationModeMask as CoreCollaborationModeMask;
+use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Settings;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::TokenUsage;
 use serde::Deserialize;
 use serde::Serialize;
@@ -65,13 +73,51 @@ pub struct ComposerSkill {
     pub path: PathBuf,
 }
 
+/// A file or folder the user added through the `@` menu's 文件和文件夹 entry.
+///
+/// Presented as a removable chip above the input rather than typed into the
+/// text, matching the Official App. That is presentation only (ADR-0021 test
+/// 2): the reference still travels to the engine as **text**, exactly as a
+/// `@`-completed path does, because a file reference has no structured
+/// `UserInput` variant — see `file_mentions_are_text_only`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComposerFileRef {
+    /// What gets folded into the message. Relative to a Project root when the
+    /// pick came from inside one, absolute otherwise.
+    pub path: String,
+}
+
+/// Quotes a path the way the TUI does before putting it in the message.
+///
+/// Copied from `chat_composer.rs::insert_selected_path`: wrap in double quotes
+/// when the path contains whitespace, unless it already contains a quote (the
+/// TUI keeps that case simple rather than escaping). The rule exists so the
+/// prompt's own arg parser treats the path as one token.
+fn quote_path_for_prompt(path: &str) -> String {
+    if path.chars().any(char::is_whitespace) && !path.contains('"') {
+        format!("\"{path}\"")
+    } else {
+        path.to_string()
+    }
+}
+
 /// Assembles the turn payload in the same order the TUI does: images, then
 /// text, then skills (`chatwidget/input_submission.rs`). Order is part of what
 /// the model sees, so it is copied rather than chosen.
+///
+/// `file_refs` are folded into the `Text` item rather than becoming items of
+/// their own. They are placed **before** the typed text: the TUI inserts a
+/// completed path at the caret, which has no analogue once a chip replaces the
+/// inline token, and leading is the closer reading — the chips render above
+/// the input, so top-to-bottom the paths already precede the prose, and a
+/// message like `src/main.rs explain this` keeps the request as the last thing
+/// the model reads.
 pub(crate) fn build_turn_input(
     text: String,
     attachments: Vec<ComposerAttachment>,
     skills: Vec<ComposerSkill>,
+    file_refs: Vec<ComposerFileRef>,
 ) -> Vec<UserInput> {
     let mut input = Vec::new();
 
@@ -85,6 +131,15 @@ pub(crate) fn build_turn_input(
             }
         }
     }
+
+    let mut parts: Vec<String> = file_refs
+        .into_iter()
+        .map(|file_ref| quote_path_for_prompt(&file_ref.path))
+        .collect();
+    if !text.is_empty() {
+        parts.push(text);
+    }
+    let text = parts.join(" ");
 
     // An attachment-only message is legitimate; an empty `Text` item is not.
     if !text.is_empty() {
@@ -111,13 +166,14 @@ pub async fn send_turn(
     text: String,
     attachments: Vec<ComposerAttachment>,
     skills: Vec<ComposerSkill>,
+    file_refs: Vec<ComposerFileRef>,
 ) -> CmdResult<JsonValue> {
     bridge
         .request(ClientRequest::TurnStart {
             request_id: bridge.next_request_id(),
             params: TurnStartParams {
                 thread_id,
-                input: build_turn_input(text, attachments, skills),
+                input: build_turn_input(text, attachments, skills, file_refs),
                 ..Default::default()
             },
         })
@@ -196,6 +252,120 @@ pub async fn search_files(
             is_directory: matches!(hit.match_type, FuzzyFileSearchMatchType::Directory),
         })
         .collect())
+}
+
+/// A collaboration-mode preset, flattened for the frontend.
+///
+/// `v2::CollaborationModeMask` carries `#[serde(rename = "reasoning_effort")]`
+/// — snake_case among camelCase siblings, the same trap `FuzzyFileSearchResult`
+/// sets. Flattening here keeps that inconsistency out of TypeScript.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollaborationModePreset {
+    pub name: String,
+    /// `"plan"` / `"default"`, or `None` when the preset leaves the mode alone.
+    pub mode: Option<String>,
+    pub model: Option<String>,
+    /// Whether this preset is one the engine considers user-visible
+    /// (`TUI_VISIBLE_COLLABORATION_MODES`), so this client offers the same set
+    /// the TUI does rather than a different one.
+    pub visible: bool,
+}
+
+fn mode_kind_name(mode: ModeKind) -> &'static str {
+    match mode {
+        ModeKind::Plan => "plan",
+        ModeKind::Default => "default",
+    }
+}
+
+fn mode_kind_from_name(name: &str) -> Option<ModeKind> {
+    match name {
+        "plan" => Some(ModeKind::Plan),
+        "default" => Some(ModeKind::Default),
+        _ => None,
+    }
+}
+
+/// `collaborationMode/list` — the presets behind the Official App's 计划模式
+/// entry. Experimental; `experimental_api: true` is set at startup.
+#[tauri::command]
+pub async fn list_collaboration_modes(
+    bridge: State<'_, AppServerBridge>,
+) -> CmdResult<Vec<CollaborationModePreset>> {
+    let response = bridge
+        .request(ClientRequest::CollaborationModeList {
+            request_id: bridge.next_request_id(),
+            params: CollaborationModeListParams {},
+        })
+        .await?;
+
+    let response: CollaborationModeListResponse =
+        serde_json::from_value(response).map_err(|err| format!("collaborationMode/list: {err}"))?;
+
+    Ok(response
+        .data
+        .into_iter()
+        .map(|mask| CollaborationModePreset {
+            name: mask.name,
+            mode: mask.mode.map(|mode| mode_kind_name(mode).to_string()),
+            model: mask.model,
+            visible: mask.mode.is_none_or(ModeKind::is_tui_visible),
+        })
+        .collect())
+}
+
+/// Applies a collaboration-mode preset to a thread.
+///
+/// The engine's model is base-plus-mask, not a flag: the client holds an
+/// unmasked `CollaborationMode` (always `Default` kind) and derives the
+/// effective mode by applying a preset mask on top
+/// (`chatwidget/settings.rs::effective_collaboration_mode`). That merge is done
+/// here by the engine's own `CollaborationMode::apply_mask` rather than
+/// re-implemented, so a future change to how a mask overrides the base cannot
+/// drift (ADR-0021).
+///
+/// `developer_instructions` is left `None` deliberately —
+/// `ThreadSettingsUpdateParams`'s own doc says null means "use the built-in
+/// instructions for the selected mode", which is exactly what selecting a
+/// preset should do.
+#[tauri::command]
+pub async fn set_collaboration_mode(
+    bridge: State<'_, AppServerBridge>,
+    thread_id: String,
+    mode: String,
+    model: Option<String>,
+    effort: Option<ReasoningEffort>,
+) -> CmdResult<JsonValue> {
+    let mode_kind =
+        mode_kind_from_name(&mode).ok_or_else(|| format!("unknown collaboration mode: {mode}"))?;
+
+    let base = CollaborationMode {
+        mode: ModeKind::Default,
+        settings: Settings {
+            model: model.unwrap_or_default(),
+            reasoning_effort: effort,
+            developer_instructions: None,
+        },
+    };
+    let mask = CoreCollaborationModeMask {
+        name: mode.clone(),
+        mode: Some(mode_kind),
+        model: None,
+        reasoning_effort: None,
+        developer_instructions: None,
+    };
+
+    bridge
+        .request(ClientRequest::ThreadSettingsUpdate {
+            request_id: bridge.next_request_id(),
+            params: ThreadSettingsUpdateParams {
+                thread_id,
+                collaboration_mode: Some(base.apply_mask(&mask)),
+                ..Default::default()
+            },
+        })
+        .await
 }
 
 /// `thread/compact/start` — the TUI's `/compact`.
@@ -352,6 +522,7 @@ mod tests {
                 name: "review".to_string(),
                 path: PathBuf::from("/skills/review"),
             }],
+            Vec::new(),
         );
 
         assert_eq!(kinds(&input), vec!["image", "localImage", "text", "skill"]);
@@ -382,6 +553,7 @@ mod tests {
                 name: "review".to_string(),
                 path: PathBuf::from("/skills/review"),
             }],
+            Vec::new(),
         );
 
         assert_eq!(kinds(&input), vec!["text", "skill"]);
@@ -396,9 +568,65 @@ mod tests {
                 path: PathBuf::from("/tmp/b.png"),
             }],
             Vec::new(),
+            Vec::new(),
         );
 
         assert_eq!(kinds(&input), vec!["localImage"]);
+    }
+
+    fn text_of(input: &[UserInput]) -> Option<&str> {
+        input.iter().find_map(|item| match item {
+            UserInput::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+    }
+
+    /// A chip-added file rides in the `Text` item ahead of what the user typed,
+    /// and still produces no structured item of its own.
+    #[test]
+    fn file_refs_lead_the_text_item() {
+        let input = build_turn_input(
+            "explain this".to_string(),
+            Vec::new(),
+            Vec::new(),
+            vec![
+                ComposerFileRef {
+                    path: "src/main.rs".to_string(),
+                },
+                ComposerFileRef {
+                    path: "docs/adr".to_string(),
+                },
+            ],
+        );
+
+        assert_eq!(kinds(&input), vec!["text"]);
+        assert_eq!(text_of(&input), Some("src/main.rs docs/adr explain this"));
+    }
+
+    /// A file reference alone is a real message: the `Text` item is emitted
+    /// even with nothing typed, unlike the empty-text case.
+    #[test]
+    fn file_ref_only_message_still_sends_text() {
+        let input = build_turn_input(
+            String::new(),
+            Vec::new(),
+            Vec::new(),
+            vec![ComposerFileRef {
+                path: "src/main.rs".to_string(),
+            }],
+        );
+
+        assert_eq!(kinds(&input), vec!["text"]);
+        assert_eq!(text_of(&input), Some("src/main.rs"));
+    }
+
+    /// Quoting follows `chat_composer.rs::insert_selected_path` exactly:
+    /// whitespace forces quotes, an existing quote suppresses them.
+    #[test]
+    fn file_ref_paths_are_quoted_like_the_tui() {
+        assert_eq!(quote_path_for_prompt("src/main.rs"), "src/main.rs");
+        assert_eq!(quote_path_for_prompt("my docs/a.md"), "\"my docs/a.md\"");
+        assert_eq!(quote_path_for_prompt("odd \"name\".md"), "odd \"name\".md");
     }
 
     /// Below the baseline the engine reports 0%, not a negative or clamped

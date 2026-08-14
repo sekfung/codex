@@ -642,6 +642,29 @@ export interface ComposerSkill {
   path: string;
 }
 
+/// A file or folder added via the `@` menu's 文件和文件夹 entry, shown as a
+/// chip. Presentation only: Rust folds `path` into the message text, since a
+/// file reference has no structured `UserInput` variant.
+export interface ComposerFileRef {
+  path: string;
+}
+
+// -- Collaboration modes (`collaborationMode/list`) --------------------------
+// Flattened by `list_collaboration_modes` in `src/composer.rs`. The wire type
+// `v2::CollaborationModeMask` carries `#[serde(rename = "reasoning_effort")]`
+// — snake_case among camelCase siblings — so it is normalized in Rust rather
+// than mirrored here.
+
+export interface CollaborationModePreset {
+  name: string;
+  /// `"plan"` / `"default"`, or absent when the preset leaves the mode alone.
+  mode?: string | null;
+  model?: string | null;
+  /// Mirrors the engine's `TUI_VISIBLE_COLLABORATION_MODES`, so this client
+  /// offers the same set the TUI does.
+  visible: boolean;
+}
+
 // -- File search (`fuzzyFileSearch`) -----------------------------------------
 
 /// One `@` completion candidate, already flattened by `search_files` in
