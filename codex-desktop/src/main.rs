@@ -230,6 +230,7 @@ fn main() {
             commands::fork_thread,
             composer::send_turn,
             composer::list_skills,
+            composer::search_files,
             composer::compact_thread,
             composer::start_review,
             composer::context_usage,

@@ -9,6 +9,7 @@ import type {
   ConfigReadResponse,
   ConfigRequirementsReadResponse,
   ContextUsage,
+  FileSearchHit,
   GetAccountRateLimitsResponse,
   GetAccountResponse,
   GetAccountTokenUsageResponse,
@@ -158,8 +159,17 @@ export const interruptTurn = (threadId: string, turnId: string) =>
 
 /// Native image picker. Reuses the already-granted `dialog:default`
 /// capability, same as the sidebar's folder picker.
+///
+/// Images only, deliberately: `UserInput` has no generic file variant
+/// (`Text | Image | LocalImage | Audio | LocalAudio | Skill | Mention`), so
+/// there is nothing to send a document as. Referencing a non-image file is
+/// what `@` mentions are for. The explicit title matters because the image
+/// filter makes this dialog look empty inside a source repo — without it,
+/// "only folders are selectable" reads as a bug rather than as the filter
+/// working.
 export const pickImageFiles = () =>
   open({
+    title: "选择图片（仅支持图片附件，引用其他文件请在输入框用 @）",
     multiple: true,
     directory: false,
     filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"] }],
@@ -167,6 +177,14 @@ export const pickImageFiles = () =>
 
 export const listSkills = (cwds: string[] = [], forceReload = false) =>
   invoke<SkillsListResponse>("list_skills", { cwds, forceReload });
+
+/// `fuzzyFileSearch`, for the composer's `@` completions.
+///
+/// `cancellationToken` is the engine's concurrency contract, not a nonce: it
+/// cancels any *previous* request that used the same value, so callers pass one
+/// stable token per typing session and let each keystroke supersede the last.
+export const searchFiles = (query: string, roots: string[], cancellationToken: string) =>
+  invoke<FileSearchHit[]>("search_files", { query, roots, cancellationToken });
 
 /// `thread/compact/start` — the TUI's `/compact`.
 export const compactThread = (threadId: string) =>

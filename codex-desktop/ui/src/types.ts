@@ -642,6 +642,20 @@ export interface ComposerSkill {
   path: string;
 }
 
+// -- File search (`fuzzyFileSearch`) -----------------------------------------
+
+/// One `@` completion candidate, already flattened by `search_files` in
+/// `src/composer.rs`. Deliberately not a mirror of `FuzzyFileSearchResult`:
+/// that type is the one nearby with no `rename_all`, so it is snake_case on
+/// the wire while its neighbours are camelCase. Rust normalizes it.
+export interface FileSearchHit {
+  /// Relative to `root`; this is the text inserted into the message.
+  path: string;
+  fileName: string;
+  root: string;
+  isDirectory: boolean;
+}
+
 // -- Skills (`skills/list`) --------------------------------------------------
 // `SkillMetadata` / `SkillsListEntry` (v2/plugin.rs), `rename_all = "camelCase"`.
 

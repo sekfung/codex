@@ -1,5 +1,10 @@
-//! Composer-side capability: structured turn input, skills, context usage,
-//! compaction and review.
+//! Composer-side capability: structured turn input, skills, file search,
+//! context usage, compaction and review.
+//!
+//! Note the asymmetry between `$` and `@`: a `$skill` produces a structured
+//! `UserInput::Skill` *alongside* the text, but an `@file` produces **only**
+//! text. That is the engine's model, not an omission here — see
+//! `file_mentions_are_text_only`.
 //!
 //! Everything that touches the wire format is built here rather than in
 //! TypeScript. `UserInput` is a `#[serde(tag = "type")]` union whose variants
@@ -10,6 +15,9 @@
 //! them onto the protocol.
 
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::FuzzyFileSearchMatchType;
+use codex_app_server_protocol::FuzzyFileSearchParams;
+use codex_app_server_protocol::FuzzyFileSearchResponse;
 use codex_app_server_protocol::ReviewDelivery;
 use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ReviewTarget;
@@ -130,6 +138,64 @@ pub async fn list_skills(
             params: SkillsListParams { cwds, force_reload },
         })
         .await
+}
+
+/// One `@` file-search hit, flattened for the frontend.
+///
+/// `FuzzyFileSearchResult` is the one type in this corner of the protocol with
+/// **no** `#[serde(rename_all = "camelCase")]`, so it arrives with snake_case
+/// `match_type`/`file_name` while everything around it is camelCase. Mapping
+/// it here means the frontend never has to encode that inconsistency — the
+/// same reasoning that keeps `UserInput` construction on this side.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileSearchHit {
+    /// Path relative to `root`, which is what gets inserted into the message.
+    pub path: String,
+    pub file_name: String,
+    pub root: String,
+    pub is_directory: bool,
+}
+
+/// `fuzzyFileSearch` — the protocol's exposure of the same `codex-file-search`
+/// engine the TUI drives in-process for its `@` completions
+/// (`tui/src/file_search.rs`).
+///
+/// `cancellation_token` is the engine's own concurrency contract: "if provided,
+/// will cancel any previous request that used the same value". The caller
+/// therefore passes one *stable* token for the whole typing session, so each
+/// keystroke's request cancels the previous in-flight one rather than racing it.
+#[tauri::command]
+pub async fn search_files(
+    bridge: State<'_, AppServerBridge>,
+    query: String,
+    roots: Vec<String>,
+    cancellation_token: String,
+) -> CmdResult<Vec<FileSearchHit>> {
+    let response = bridge
+        .request(ClientRequest::FuzzyFileSearch {
+            request_id: bridge.next_request_id(),
+            params: FuzzyFileSearchParams {
+                query,
+                roots,
+                cancellation_token: Some(cancellation_token),
+            },
+        })
+        .await?;
+
+    let response: FuzzyFileSearchResponse =
+        serde_json::from_value(response).map_err(|err| format!("fuzzyFileSearch: {err}"))?;
+
+    Ok(response
+        .files
+        .into_iter()
+        .map(|hit| FileSearchHit {
+            path: hit.path,
+            file_name: hit.file_name,
+            root: hit.root,
+            is_directory: matches!(hit.match_type, FuzzyFileSearchMatchType::Directory),
+        })
+        .collect())
 }
 
 /// `thread/compact/start` — the TUI's `/compact`.
@@ -289,6 +355,36 @@ mod tests {
         );
 
         assert_eq!(kinds(&input), vec!["image", "localImage", "text", "skill"]);
+    }
+
+    /// A referenced file rides in the `Text` item and produces no structured
+    /// item of its own.
+    ///
+    /// This is the engine's model, established from the TUI rather than
+    /// assumed: `chat_composer.rs::insert_selected_path` replaces the `@token`
+    /// with a bare relative path — dropping the `@` — and records no mention
+    /// binding, while its sibling `insert_selected_mention` (used for skills,
+    /// plugins and apps) does record one. Correspondingly, every
+    /// `UserInput::Mention` constructed anywhere in the workspace carries a URI
+    /// path (`plugin://`, `app://`, `skill://`), never a file path; see
+    /// `chatwidget/input_submission.rs` and `ext/skills/src/selection.rs`.
+    ///
+    /// So emitting `UserInput::Mention` for a file would be inventing a
+    /// capability no other client sends, which ADR-0021 forbids. The test
+    /// exists to keep that from being "fixed" later by someone who reads the
+    /// asymmetry as a bug.
+    #[test]
+    fn file_mentions_are_text_only() {
+        let input = build_turn_input(
+            "explain src/main.rs and $review it".to_string(),
+            Vec::new(),
+            vec![ComposerSkill {
+                name: "review".to_string(),
+                path: PathBuf::from("/skills/review"),
+            }],
+        );
+
+        assert_eq!(kinds(&input), vec!["text", "skill"]);
     }
 
     /// An image with no caption is a real message; an empty `Text` item is not.

@@ -1,9 +1,11 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowUp,
   Check,
   ChevronDown,
   CircleAlert,
+  FileText,
+  Folder,
   Hand,
   Loader2,
   Paperclip,
@@ -19,6 +21,7 @@ import type {
   ApprovalMode,
   ComposerAttachment,
   ComposerSkill,
+  FileSearchHit,
   ModelSelection,
   ReasoningEffort,
   SkillMetadata,
@@ -82,16 +85,22 @@ function effortLabel(effort: ReasoningEffort | null): string {
 }
 
 
-/// Finds a `$name` token being typed at the caret, for the skill typeahead.
+/// Finds a sigil-prefixed token being typed at the caret, for a typeahead.
 ///
-/// `$` is the engine's tool-mention sigil (`utils/plugins/src/mention_syntax.rs`
-/// — `TOOL_MENTION_SIGIL`), not a convention invented here.
-function activeSkillQuery(text: string, caret: number): { start: number; query: string } | null {
+/// Both sigils are the engine's own, not conventions invented here: `$` is
+/// `TOOL_MENTION_SIGIL` and `@` is `PLUGIN_TEXT_MENTION_SIGIL`
+/// (`utils/plugins/src/mention_syntax.rs`), and the TUI composer completes
+/// files on `@` (`chat_composer.rs::insert_selected_path`).
+function activeMentionQuery(
+  text: string,
+  caret: number,
+  sigil: "$" | "@",
+): { start: number; query: string } | null {
   const upto = text.slice(0, caret);
-  const start = upto.lastIndexOf("$");
+  const start = upto.lastIndexOf(sigil);
   if (start === -1) return null;
   // Must start a word: `a$b` is not a mention.
-  if (start > 0 && /[\w$]/.test(upto[start - 1])) return null;
+  if (start > 0 && /[\w$@]/.test(upto[start - 1])) return null;
   const query = upto.slice(start + 1);
   // A mention is a single token; whitespace ends it.
   if (/\s/.test(query)) return null;
@@ -110,6 +119,16 @@ export function Composer({ threadId }: { threadId: string }) {
   const [pickedSkills, setPickedSkills] = useState<ComposerSkill[]>([]);
   const [skillQuery, setSkillQuery] = useState<{ start: number; query: string } | null>(null);
   const [skillHighlight, setSkillHighlight] = useState(0);
+  /// `@` file completions. Unlike skills there is no companion structured
+  /// item — a picked file becomes plain path text, which is the engine's own
+  /// model (see `file_mentions_are_text_only` in `src/composer.rs`).
+  const [fileQuery, setFileQuery] = useState<{ start: number; query: string } | null>(null);
+  const [fileMatches, setFileMatches] = useState<FileSearchHit[]>([]);
+  const [fileHighlight, setFileHighlight] = useState(0);
+  /// One stable token for this composer's whole lifetime: `fuzzyFileSearch`
+  /// cancels the previous request that used the same value, so reusing it is
+  /// what makes a fast typist's earlier search yield to the later one.
+  const fileSearchToken = useRef(`codex-desktop-file-search-${Math.random().toString(36).slice(2)}`);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
@@ -151,10 +170,66 @@ export function Composer({ threadId }: { threadId: string }) {
       .slice(0, 8);
   }, [skillQuery, state.skills]);
 
-  function syncSkillQuery(value: string, caret: number) {
-    const next = activeSkillQuery(value, caret);
-    setSkillQuery(next);
+  /// Roots to search: the open Projects, matching how skills are scanned
+  /// per-cwd. `fuzzyFileSearch` takes `roots` explicitly and searches nothing
+  /// when given none.
+  const searchRoots = useMemo(
+    () => state.projects.map((project) => project.path),
+    [state.projects],
+  );
+
+  /// Debounced `fuzzyFileSearch`. `ignore` guards against a late response
+  /// landing after the query moved on; the shared cancellation token means the
+  /// server is already dropping the superseded search rather than computing it.
+  useEffect(() => {
+    if (!fileQuery || searchRoots.length === 0) {
+      setFileMatches([]);
+      return;
+    }
+    let ignore = false;
+    const timer = setTimeout(() => {
+      api
+        .searchFiles(fileQuery.query, searchRoots, fileSearchToken.current)
+        .then((hits) => {
+          if (ignore) return;
+          setFileMatches(hits.slice(0, 8));
+          setFileHighlight(0);
+        })
+        .catch((error) => {
+          if (ignore) return;
+          // A failed completion should not eat the keystroke — just show nothing.
+          setFileMatches([]);
+          console.warn("fuzzyFileSearch failed", error);
+        });
+    }, 120);
+    return () => {
+      ignore = true;
+      clearTimeout(timer);
+    };
+  }, [fileQuery, searchRoots]);
+
+  function syncMentionQueries(value: string, caret: number) {
+    setSkillQuery(activeMentionQuery(value, caret, "$"));
     setSkillHighlight(0);
+    setFileQuery(activeMentionQuery(value, caret, "@"));
+  }
+
+  /// Replaces the `@que` token with the bare path, dropping the `@`.
+  ///
+  /// This mirrors the TUI's `insert_selected_path`, which likewise inserts the
+  /// path alone and records no structured item — files ride in the message
+  /// text, unlike skills.
+  function chooseFile(hit: FileSearchHit) {
+    if (!fileQuery) return;
+    const caret = textareaRef.current?.selectionStart ?? text.length;
+    // The TUI quotes paths containing whitespace so the prompt's arg parser
+    // keeps them as one token; same rule here.
+    const inserted =
+      /\s/.test(hit.path) && !hit.path.includes('"') ? `"${hit.path}"` : hit.path;
+    setText(`${text.slice(0, fileQuery.start)}${inserted} ${text.slice(caret)}`);
+    setFileQuery(null);
+    setFileMatches([]);
+    queueMicrotask(() => textareaRef.current?.focus());
   }
 
   /// Replaces the partially-typed `$que` with the full `$name` and records the
@@ -196,6 +271,8 @@ export function Composer({ threadId }: { threadId: string }) {
       setAttachments([]);
       setPickedSkills([]);
       setSkillQuery(null);
+      setFileQuery(null);
+      setFileMatches([]);
     } finally {
       setSending(false);
     }
@@ -279,6 +356,39 @@ export function Composer({ threadId }: { threadId: string }) {
             </div>
           )}
 
+          {fileQuery && fileMatches.length > 0 && (
+            <div className="absolute bottom-full left-3 z-20 mb-2 w-96 overflow-hidden rounded-xl border border-border bg-popover p-1 shadow-lg">
+              <div className="px-2 py-1 text-[11px] text-muted-foreground">文件</div>
+              {fileMatches.map((hit, index) => (
+                <button
+                  key={`${hit.root}/${hit.path}`}
+                  type="button"
+                  onMouseDown={(event) => {
+                    // mousedown, not click: the textarea must not lose focus
+                    // before we can restore the caret.
+                    event.preventDefault();
+                    chooseFile(hit);
+                  }}
+                  onMouseEnter={() => setFileHighlight(index)}
+                  className={cn(
+                    "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left",
+                    index === fileHighlight ? "bg-accent" : "hover:bg-accent/60",
+                  )}
+                >
+                  {hit.isDirectory ? (
+                    <Folder className="size-3.5 shrink-0 text-muted-foreground" />
+                  ) : (
+                    <FileText className="size-3.5 shrink-0 text-muted-foreground" />
+                  )}
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[13px] font-medium">{hit.fileName}</span>
+                    <span className="block truncate text-xs text-muted-foreground">{hit.path}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+
           {attachments.length > 0 && (
             <div className="flex flex-wrap gap-1.5 px-3 pt-3">
               {attachments.map((attachment, index) => (
@@ -311,18 +421,47 @@ export function Composer({ threadId }: { threadId: string }) {
             ref={textareaRef}
             rows={2}
             className="w-full resize-none bg-transparent px-4 pt-3.5 pb-2 text-[15px] leading-6 placeholder:text-muted-foreground focus:outline-none"
-            placeholder="随心输入，输入 $ 引用技能..."
+            placeholder="随心输入，输入 $ 引用技能，@ 引用文件..."
             value={text}
             onChange={(event) => {
               setText(event.target.value);
-              syncSkillQuery(event.target.value, event.target.selectionStart ?? 0);
+              syncMentionQueries(event.target.value, event.target.selectionStart ?? 0);
             }}
             onClick={(event) =>
-              syncSkillQuery(event.currentTarget.value, event.currentTarget.selectionStart ?? 0)
+              syncMentionQueries(event.currentTarget.value, event.currentTarget.selectionStart ?? 0)
             }
-            onBlur={() => setSkillQuery(null)}
+            onBlur={() => {
+              setSkillQuery(null);
+              setFileQuery(null);
+            }}
             onKeyDown={(event) => {
-              // While the typeahead is open it owns the arrow/enter keys.
+              // While a typeahead is open it owns the arrow/enter keys. Only
+              // one can be open at a time: the two sigils can't both start the
+              // token at the caret.
+              if (fileQuery && fileMatches.length > 0) {
+                if (event.key === "ArrowDown") {
+                  event.preventDefault();
+                  setFileHighlight((index) => (index + 1) % fileMatches.length);
+                  return;
+                }
+                if (event.key === "ArrowUp") {
+                  event.preventDefault();
+                  setFileHighlight(
+                    (index) => (index - 1 + fileMatches.length) % fileMatches.length,
+                  );
+                  return;
+                }
+                if (event.key === "Enter" || event.key === "Tab") {
+                  event.preventDefault();
+                  chooseFile(fileMatches[fileHighlight]);
+                  return;
+                }
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  setFileQuery(null);
+                  return;
+                }
+              }
               if (skillQuery && skillMatches.length > 0) {
                 if (event.key === "ArrowDown") {
                   event.preventDefault();
