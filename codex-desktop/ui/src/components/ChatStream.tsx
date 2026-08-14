@@ -4,6 +4,7 @@ import {
   ChevronRight,
   Copy,
   FileDiff,
+  FileSearch,
   GitBranch,
   Loader2,
   Sparkles,
@@ -39,13 +40,7 @@ const SKIPPED_TYPES = new Set([
   "plan",
 ]);
 
-const GENERIC_TIER_TYPES = new Set([
-  "mcpToolCall",
-  "webSearch",
-  "imageGeneration",
-  "enteredReviewMode",
-  "exitedReviewMode",
-]);
+const GENERIC_TIER_TYPES = new Set(["mcpToolCall", "webSearch", "imageGeneration"]);
 
 /// Shared column so messages, activity rows and approval cards all align on
 /// one comfortable measure rather than stretching to the window width.
@@ -169,6 +164,24 @@ function ItemRenderer({
       return <CommandExecutionView item={item as CommandExecutionItem} />;
     case "fileChange":
       return <FileChangeView item={item as FileChangeItem} />;
+    // Review mode was generic-tier under ADR-0013, but `review/start` is now a
+    // real entry point in the composer, so the boundary of a review is worth
+    // showing properly. This is presentation only — the capability is
+    // unchanged (ADR-0021).
+    case "enteredReviewMode":
+      return (
+        <ReviewBoundary
+          label={String((item as { review?: string }).review ?? "代码审查")}
+          entering
+        />
+      );
+    case "exitedReviewMode":
+      return (
+        <ReviewBoundary
+          label={String((item as { review?: string }).review ?? "代码审查")}
+          entering={false}
+        />
+      );
     case "collabAgentToolCall":
       // Multi-agent drill-in (ADR-0014) is an open UI question per ADR-0017 —
       // this placeholder doesn't navigate anywhere yet.
@@ -224,6 +237,22 @@ function ActivityRow({
         {children}
       </CollapsibleContent>
     </Collapsible>
+  );
+}
+
+/// Marks where a review begins and ends. `review` carries the engine's own
+/// user-facing hint (`CoreTurnItem::EnteredReviewMode.user_facing_hint`), so
+/// it is shown verbatim rather than reworded.
+function ReviewBoundary({ label, entering }: { label: string; entering: boolean }) {
+  return (
+    <div className="flex items-center gap-2.5 py-0.5">
+      <span className="h-px flex-1 bg-border" />
+      <span className="flex items-center gap-1.5 text-[13px] text-muted-foreground">
+        <FileSearch className="size-3.5 shrink-0" />
+        {entering ? label : `${label} · 已结束`}
+      </span>
+      <span className="h-px flex-1 bg-border" />
+    </div>
   );
 }
 

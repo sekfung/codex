@@ -4,8 +4,11 @@ import { open } from "@tauri-apps/plugin-dialog";
 import type {
   AppServerEventEnvelope,
   ApprovalMode,
+  ComposerAttachment,
+  ComposerSkill,
   ConfigReadResponse,
   ConfigRequirementsReadResponse,
+  ContextUsage,
   GetAccountRateLimitsResponse,
   GetAccountResponse,
   GetAccountTokenUsageResponse,
@@ -18,7 +21,10 @@ import type {
   PluginListResponse,
   Project,
   ReasoningEffort,
+  ReviewDelivery,
+  ReviewTargetInput,
   SettingEdit,
+  SkillsListResponse,
   ThreadListResponse,
   ThreadResumeResponse,
   ThreadSearchResponse,
@@ -136,10 +142,54 @@ export const openPathInOs = (path: string) => invoke<void>("open_path_in_os", { 
 
 // -- Turns --------------------------------------------------------------
 
-export const sendTurn = (threadId: string, text: string) =>
-  invoke<unknown>("send_turn", { threadId, text });
+/// Attachments and skills are sent as this app's own flat shapes; Rust
+/// (`src/composer.rs`) maps them onto `UserInput` and orders them the way the
+/// TUI does (images, text, skills).
+export const sendTurn = (
+  threadId: string,
+  text: string,
+  attachments: ComposerAttachment[] = [],
+  skills: ComposerSkill[] = [],
+) => invoke<unknown>("send_turn", { threadId, text, attachments, skills });
 export const interruptTurn = (threadId: string, turnId: string) =>
   invoke<unknown>("interrupt_turn", { threadId, turnId });
+
+// -- Composer capability -----------------------------------------------------
+
+/// Native image picker. Reuses the already-granted `dialog:default`
+/// capability, same as the sidebar's folder picker.
+export const pickImageFiles = () =>
+  open({
+    multiple: true,
+    directory: false,
+    filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"] }],
+  });
+
+export const listSkills = (cwds: string[] = [], forceReload = false) =>
+  invoke<SkillsListResponse>("list_skills", { cwds, forceReload });
+
+/// `thread/compact/start` — the TUI's `/compact`.
+export const compactThread = (threadId: string) =>
+  invoke<unknown>("compact_thread", { threadId });
+
+/// `review/start` — the CLI's `codex review`.
+export const startReview = (
+  threadId: string,
+  target: ReviewTargetInput,
+  delivery: ReviewDelivery,
+) => invoke<unknown>("start_review", { threadId, target, delivery });
+
+/// Context pressure, computed by the engine's formula in Rust.
+export const contextUsage = (
+  lastTotalTokens: number,
+  totalTokensInWindow: number,
+  modelContextWindow: number | null,
+) =>
+  invoke<ContextUsage>("context_usage", {
+    lastTotalTokens,
+    totalTokensInWindow,
+    modelContextWindow,
+  });
 
 // -- Approvals (ADR-0015 / ADR-0016) -----------------------------------------
 

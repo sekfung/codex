@@ -15,23 +15,30 @@ import type {
   ApprovalMode,
   CodexConfig,
   CommandExecutionItem,
+  ComposerAttachment,
+  ComposerSkill,
   ConfigLayerMetadata,
   ConfigRequirements,
+  ContextUsage,
+  McpServerRuntimeState,
   Model,
   ModelSelection,
   PendingApproval,
   PendingCommandExecutionApproval,
+  PendingLogin,
   PendingPermissionsApproval,
   Project,
   RateLimitSnapshot,
+  ReviewDelivery,
+  ReviewTargetInput,
   SettingEdit,
+  SkillMetadata,
   ThreadItem,
   ThreadSearchResult,
   ThreadSummary,
+  ThreadTokenUsage,
   Turn,
   TurnStatus,
-  McpServerRuntimeState,
-  PendingLogin,
 } from "./types";
 
 /// Whether this thread's pre-existing history has been pulled in via
@@ -59,6 +66,18 @@ export interface ThreadState {
   pendingApprovals: PendingApproval[];
   historyStatus: HistoryStatus;
   historyError: string | null;
+  /// Latest `thread/tokenUsage/updated` payload. Null until the first turn
+  /// reports usage — a fresh thread genuinely has none, which is why the
+  /// indicator is absent rather than showing 100%.
+  tokenUsage: ThreadTokenUsage | null;
+  /// Context pressure derived from `tokenUsage` by the engine's own formula
+  /// (computed in Rust — see `src/composer.rs`), so the baseline constant
+  /// can't drift from the engine (ADR-0021).
+  contextUsage: ContextUsage | null;
+  /// True between `thread/compact/start` returning and `thread/compacted`
+  /// arriving. Compaction is not instant and rewrites history, so it needs a
+  /// visible running state rather than a silent pause.
+  compacting: boolean;
 }
 
 function emptyThread(): ThreadState {
@@ -70,6 +89,9 @@ function emptyThread(): ThreadState {
     activeTurnId: null,
     activeTurnStartedAtMs: null,
     pendingApprovals: [],
+    tokenUsage: null,
+    contextUsage: null,
+    compacting: false,
     historyStatus: "idle",
     historyError: null,
   };
@@ -147,9 +169,18 @@ interface State {
   mcpRuntime: Record<string, McpServerRuntimeState>;
   /// In-flight ChatGPT sign-in. Cleared by `account/login/completed`.
   pendingLogin: PendingLogin | null;
+  /// Skills available for `$name` mentions, from `skills/list` across the open
+  /// Projects. Refreshed on `skills/changed`. Empty is a legitimate state
+  /// (no skills installed), so the typeahead simply finds nothing.
+  skills: SkillMetadata[];
 }
 
 type Action =
+  | { type: "SKILLS_LOADED"; skills: SkillMetadata[] }
+  | { type: "TOKEN_USAGE_UPDATED"; threadId: string; tokenUsage: ThreadTokenUsage }
+  | { type: "CONTEXT_USAGE_COMPUTED"; threadId: string; contextUsage: ContextUsage }
+  | { type: "COMPACTION_STARTED"; threadId: string }
+  | { type: "COMPACTION_FINISHED"; threadId: string }
   | { type: "PROJECTS_LOADED"; projects: Project[] }
   | { type: "PROJECT_ADDED"; project: Project }
   | { type: "PROJECT_REMOVED"; id: string }
@@ -365,6 +396,28 @@ function reducer(state: State, action: Action): State {
       // The protocol documents `account/rateLimits/updated` as a *sparse
       // rolling update*: absent fields mean "unchanged", not "cleared".
       return { ...state, rateLimits: mergeRateLimits(state.rateLimits, action.rateLimits) };
+    case "SKILLS_LOADED":
+      return { ...state, skills: action.skills };
+    case "TOKEN_USAGE_UPDATED":
+      return withThread(state, action.threadId, (thread) => ({
+        ...thread,
+        tokenUsage: action.tokenUsage,
+      }));
+    case "CONTEXT_USAGE_COMPUTED":
+      return withThread(state, action.threadId, (thread) => ({
+        ...thread,
+        contextUsage: action.contextUsage,
+      }));
+    case "COMPACTION_STARTED":
+      return withThread(state, action.threadId, (thread) => ({
+        ...thread,
+        compacting: true,
+      }));
+    case "COMPACTION_FINISHED":
+      return withThread(state, action.threadId, (thread) => ({
+        ...thread,
+        compacting: false,
+      }));
     case "ACTIVE_THREAD_SET":
       return { ...state, activeThreadId: action.threadId };
     case "ITEM_UPSERT_DELTA":
@@ -631,6 +684,7 @@ const initialState: State = {
   modelSelectionOverridden: false,
   mcpRuntime: {},
   pendingLogin: null,
+  skills: [],
 };
 
 interface StoreValue {
@@ -641,7 +695,19 @@ interface StoreValue {
   addProject: (path: string) => Promise<void>;
   removeProject: (id: string) => Promise<void>;
   startNewThread: (cwd: string) => Promise<void>;
-  sendMessage: (threadId: string, text: string) => Promise<void>;
+  sendMessage: (
+    threadId: string,
+    text: string,
+    attachments?: ComposerAttachment[],
+    skills?: ComposerSkill[],
+  ) => Promise<void>;
+  compactThread: (threadId: string) => Promise<void>;
+  startReview: (
+    threadId: string,
+    target: ReviewTargetInput,
+    delivery: ReviewDelivery,
+  ) => Promise<void>;
+  refetchSkills: () => void;
   forkThreadFromTurn: (threadId: string, turnId: string) => Promise<void>;
   /// Thread management. Each is a thin call onto a `thread/*` RPC (ADR-0021);
   /// the resulting list changes arrive as server notifications rather than
@@ -693,6 +759,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState);
   const activeProjectPathRef = useRef<string | null>(null);
   activeProjectPathRef.current = state.activeProjectPath;
+  /// Skills are scanned per-cwd, so `skills/list` gets every open Project
+  /// rather than only the active one — a `$mention` should resolve the same
+  /// way regardless of which Project is selected when you type it.
+  const projectPathsRef = useRef<string[]>([]);
+  projectPathsRef.current = state.projects.map((project) => project.path);
   // Read inside callbacks that must not re-create on every thread-state
   // change (they'd otherwise re-run effects that depend on their identity).
   const threadsRef = useRef<Record<string, ThreadState>>({});
@@ -771,15 +842,59 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       .catch((error) => tracingWarn(`account/read failed: ${String(error)}`));
   }, []);
 
+  /// `skills/list` across the open Projects, so repo-local skills resolve.
+  /// A failure leaves the catalog empty: `$` then simply matches nothing,
+  /// which is the same experience as having no skills installed.
+  const refetchSkills = useCallback(() => {
+    const cwds = projectPathsRef.current;
+    api
+      .listSkills(cwds)
+      .then((response) => {
+        // One entry per cwd, each with its own skills; the composer wants a
+        // flat list. De-duplicate by path, since a skill visible from two
+        // Projects is one skill.
+        const byPath = new Map<string, SkillMetadata>();
+        for (const entry of response.data ?? []) {
+          for (const skill of entry.skills ?? []) {
+            if (skill.enabled !== false) byPath.set(skill.path, skill);
+          }
+        }
+        dispatch({ type: "SKILLS_LOADED", skills: [...byPath.values()] });
+      })
+      .catch((error) => tracingWarn(`skills/list failed: ${String(error)}`));
+  }, []);
+
+  const computeContextUsage = useCallback((threadId: string, usage: ThreadTokenUsage) => {
+    api
+      .contextUsage(
+        usage.last?.totalTokens ?? 0,
+        usage.total?.totalTokens ?? 0,
+        usage.modelContextWindow ?? null,
+      )
+      .then((contextUsage) =>
+        dispatch({ type: "CONTEXT_USAGE_COMPUTED", threadId, contextUsage }),
+      )
+      .catch((error) => tracingWarn(`context usage computation failed: ${String(error)}`));
+  }, []);
+
+  // Re-listed whenever the Project set changes, not just at mount: skills are
+  // scanned per-cwd, and at mount the Project list has usually not loaded yet,
+  // so a mount-only fetch would only ever see the session cwd.
+  useEffect(() => {
+    refetchSkills();
+  }, [refetchSkills, state.projects]);
+
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     api
-      .onAppServerEvent((envelope) => handleEvent(envelope, dispatch, { refetchAccount }))
+      .onAppServerEvent((envelope) =>
+        handleEvent(envelope, dispatch, { refetchAccount, refetchSkills, computeContextUsage }),
+      )
       .then((fn) => {
         unlisten = fn;
       });
     return () => unlisten?.();
-  }, [refetchAccount]);
+  }, [refetchAccount, refetchSkills, computeContextUsage]);
 
   useEffect(() => {
     refetchAccount();
@@ -897,9 +1012,47 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const sendMessage = useCallback(async (threadId: string, text: string) => {
-    await api.sendTurn(threadId, text);
+  const sendMessage = useCallback(
+    async (
+      threadId: string,
+      text: string,
+      attachments: ComposerAttachment[] = [],
+      skills: ComposerSkill[] = [],
+    ) => {
+      await api.sendTurn(threadId, text, attachments, skills);
+    },
+    [],
+  );
+
+  /// `thread/compact/start`. The running flag is cleared by the
+  /// `thread/compacted` notification, not here — compaction continues
+  /// server-side after this call returns.
+  const compactThread = useCallback(async (threadId: string) => {
+    dispatch({ type: "COMPACTION_STARTED", threadId });
+    try {
+      await api.compactThread(threadId);
+    } catch (error) {
+      dispatch({ type: "COMPACTION_FINISHED", threadId });
+      throw error;
+    }
   }, []);
+
+  /// `review/start`. A detached review runs on a *different* thread
+  /// (`reviewThreadId`); switching to it is what keeps that from being a dead
+  /// end, since ADR-0017 keeps sub-agent-kind threads out of the sidebar's
+  /// default listing so it may not appear there on its own.
+  const startReview = useCallback(
+    async (threadId: string, target: ReviewTargetInput, delivery: ReviewDelivery) => {
+      const response = (await api.startReview(threadId, target, delivery)) as {
+        reviewThreadId?: string;
+      };
+      const reviewThreadId = response?.reviewThreadId;
+      if (delivery === "detached" && reviewThreadId && reviewThreadId !== threadId) {
+        await setActiveThread(reviewThreadId);
+      }
+    },
+    [setActiveThread],
+  );
 
   /// ADR-0018's Fork action. `thread/fork` returns the new thread, which
   /// becomes active; its history comes back through the normal resume path.
@@ -1091,6 +1244,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       removeProject,
       startNewThread,
       sendMessage,
+      compactThread,
+      startReview,
+      refetchSkills,
       forkThreadFromTurn,
       renameThread,
       archiveThread,
@@ -1120,6 +1276,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       removeProject,
       startNewThread,
       sendMessage,
+      compactThread,
+      startReview,
+      refetchSkills,
       forkThreadFromTurn,
       renameThread,
       archiveThread,
@@ -1176,6 +1335,12 @@ function handleEvent(
 /// rather than reaching for module-level state.
 interface NotificationEffects {
   refetchAccount: () => void;
+  refetchSkills: () => void;
+  /// Token usage arrives as raw counts; turning them into a percentage is
+  /// engine arithmetic, so it round-trips to Rust rather than being computed
+  /// here (ADR-0021). One call per usage notification, which fires per turn,
+  /// not per token.
+  computeContextUsage: (threadId: string, usage: ThreadTokenUsage) => void;
 }
 
 function handleNotification(
@@ -1242,6 +1407,24 @@ function handleNotification(
       turnId: String(turn?.id ?? ""),
       status,
     });
+    return;
+  }
+
+  if (method === "thread/tokenUsage/updated") {
+    const threadId = String(p.threadId);
+    const tokenUsage = p.tokenUsage as ThreadTokenUsage;
+    dispatch({ type: "TOKEN_USAGE_UPDATED", threadId, tokenUsage });
+    effects.computeContextUsage(threadId, tokenUsage);
+    return;
+  }
+  if (method === "thread/compacted") {
+    dispatch({ type: "COMPACTION_FINISHED", threadId: String(p.threadId) });
+    return;
+  }
+  // `SkillsChangedNotification` is an empty struct — it says *that* skills
+  // changed, never which, so the only correct response is a re-list.
+  if (method === "skills/changed") {
+    effects.refetchSkills();
     return;
   }
 

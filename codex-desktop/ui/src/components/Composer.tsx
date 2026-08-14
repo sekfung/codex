@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   ArrowUp,
   Check,
@@ -6,13 +6,26 @@ import {
   CircleAlert,
   Hand,
   Loader2,
+  Paperclip,
   Plus,
   ShieldCheck,
   Square,
+  X,
 } from "lucide-react";
 
 import { useStore } from "../store";
-import type { ApprovalMode, ModelSelection, ReasoningEffort } from "../types";
+import * as api from "../api";
+import type {
+  ApprovalMode,
+  ComposerAttachment,
+  ComposerSkill,
+  ModelSelection,
+  ReasoningEffort,
+  SkillMetadata,
+} from "../types";
+import { skillSummary } from "../types";
+import { ContextMeter } from "./ContextMeter";
+import { ReviewLauncher } from "./ReviewLauncher";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
@@ -68,12 +81,36 @@ function effortLabel(effort: ReasoningEffort | null): string {
   return EFFORT_LABELS[effort] ?? effort;
 }
 
+
+/// Finds a `$name` token being typed at the caret, for the skill typeahead.
+///
+/// `$` is the engine's tool-mention sigil (`utils/plugins/src/mention_syntax.rs`
+/// — `TOOL_MENTION_SIGIL`), not a convention invented here.
+function activeSkillQuery(text: string, caret: number): { start: number; query: string } | null {
+  const upto = text.slice(0, caret);
+  const start = upto.lastIndexOf("$");
+  if (start === -1) return null;
+  // Must start a word: `a$b` is not a mention.
+  if (start > 0 && /[\w$]/.test(upto[start - 1])) return null;
+  const query = upto.slice(start + 1);
+  // A mention is a single token; whitespace ends it.
+  if (/\s/.test(query)) return null;
+  return { start, query };
+}
+
 // ADR-0016 layer 1: a persistent mode selector, separate from the per-item
 // approval cards in ChatStream.
 export function Composer({ threadId }: { threadId: string }) {
   const { state, sendMessage, setApprovalMode, setModelSelection, interruptActiveTurn } =
     useStore();
   const [text, setText] = useState("");
+  const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
+  /// Skills the user picked from the typeahead this message. The `$name` token
+  /// also stays in `text` — the engine wants both (see `src/composer.rs`).
+  const [pickedSkills, setPickedSkills] = useState<ComposerSkill[]>([]);
+  const [skillQuery, setSkillQuery] = useState<{ start: number; query: string } | null>(null);
+  const [skillHighlight, setSkillHighlight] = useState(0);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [sending, setSending] = useState(false);
@@ -98,13 +135,67 @@ export function Composer({ threadId }: { threadId: string }) {
   // Before `model/list` resolves there is nothing truthful to name.
   const modelLabel = activeModel?.displayName ?? selection.model ?? "默认模型";
 
+  /// Skills actually still referenced in the text. Deleting a `$name` after
+  /// picking it should drop the structured item too, or the engine would load
+  /// a skill the message no longer mentions.
+  const activeSkills = useMemo(
+    () => pickedSkills.filter((skill) => text.includes(`$${skill.name}`)),
+    [pickedSkills, text],
+  );
+
+  const skillMatches = useMemo(() => {
+    if (!skillQuery) return [];
+    const needle = skillQuery.query.toLowerCase();
+    return state.skills
+      .filter((skill) => skill.name.toLowerCase().includes(needle))
+      .slice(0, 8);
+  }, [skillQuery, state.skills]);
+
+  function syncSkillQuery(value: string, caret: number) {
+    const next = activeSkillQuery(value, caret);
+    setSkillQuery(next);
+    setSkillHighlight(0);
+  }
+
+  /// Replaces the partially-typed `$que` with the full `$name` and records the
+  /// structured skill.
+  function chooseSkill(skill: SkillMetadata) {
+    if (!skillQuery) return;
+    const caret = textareaRef.current?.selectionStart ?? text.length;
+    const next = `${text.slice(0, skillQuery.start)}$${skill.name} ${text.slice(caret)}`;
+    setText(next);
+    setPickedSkills((current) =>
+      current.some((entry) => entry.path === skill.path)
+        ? current
+        : [...current, { name: skill.name, path: skill.path }],
+    );
+    setSkillQuery(null);
+    queueMicrotask(() => textareaRef.current?.focus());
+  }
+
+  async function handleAttach() {
+    const picked = await api.pickImageFiles();
+    if (!picked) return;
+    const paths = Array.isArray(picked) ? picked : [picked];
+    setAttachments((current) => [
+      ...current,
+      ...paths
+        .filter((path) => !current.some((entry) => entry.kind === "localImage" && entry.path === path))
+        .map((path) => ({ kind: "localImage" as const, path })),
+    ]);
+  }
+
   async function handleSend() {
     const trimmed = text.trim();
-    if (!trimmed || sending) return;
+    // An image with no caption is a real message, so attachments alone can send.
+    if ((!trimmed && attachments.length === 0) || sending) return;
     setSending(true);
     try {
-      await sendMessage(threadId, trimmed);
+      await sendMessage(threadId, trimmed, attachments, activeSkills);
       setText("");
+      setAttachments([]);
+      setPickedSkills([]);
+      setSkillQuery(null);
     } finally {
       setSending(false);
     }
@@ -157,14 +248,105 @@ export function Composer({ threadId }: { threadId: string }) {
           </div>
         )}
 
-        <div className="rounded-2xl border border-border bg-card shadow-sm focus-within:border-ring/50">
+        <div className="relative rounded-2xl border border-border bg-card shadow-sm focus-within:border-ring/50">
+          {skillQuery && skillMatches.length > 0 && (
+            <div className="absolute bottom-full left-3 z-20 mb-2 w-96 overflow-hidden rounded-xl border border-border bg-popover p-1 shadow-lg">
+              <div className="px-2 py-1 text-[11px] text-muted-foreground">技能</div>
+              {skillMatches.map((skill, index) => (
+                <button
+                  key={skill.path}
+                  type="button"
+                  onMouseDown={(event) => {
+                    // mousedown, not click: the textarea must not lose focus
+                    // before we can restore the caret.
+                    event.preventDefault();
+                    chooseSkill(skill);
+                  }}
+                  onMouseEnter={() => setSkillHighlight(index)}
+                  className={cn(
+                    "flex w-full flex-col gap-0.5 rounded-lg px-2 py-1.5 text-left",
+                    index === skillHighlight ? "bg-accent" : "hover:bg-accent/60",
+                  )}
+                >
+                  <span className="text-[13px] font-medium">${skill.name}</span>
+                  {skillSummary(skill) && (
+                    <span className="line-clamp-1 text-xs text-muted-foreground">
+                      {skillSummary(skill)}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {attachments.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 px-3 pt-3">
+              {attachments.map((attachment, index) => (
+                <span
+                  key={`${attachment.kind}-${index}`}
+                  className="flex max-w-[240px] items-center gap-1.5 rounded-md bg-muted px-2 py-1 text-xs"
+                >
+                  <Paperclip className="size-3 shrink-0 text-muted-foreground" />
+                  <span className="truncate">
+                    {attachment.kind === "localImage"
+                      ? attachment.path.split(/[/\\]/).pop()
+                      : attachment.url}
+                  </span>
+                  <button
+                    type="button"
+                    aria-label="移除附件"
+                    className="shrink-0 text-muted-foreground hover:text-foreground"
+                    onClick={() =>
+                      setAttachments((current) => current.filter((_, i) => i !== index))
+                    }
+                  >
+                    <X className="size-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+
           <textarea
+            ref={textareaRef}
             rows={2}
             className="w-full resize-none bg-transparent px-4 pt-3.5 pb-2 text-[15px] leading-6 placeholder:text-muted-foreground focus:outline-none"
-            placeholder="随心输入..."
+            placeholder="随心输入，输入 $ 引用技能..."
             value={text}
-            onChange={(event) => setText(event.target.value)}
+            onChange={(event) => {
+              setText(event.target.value);
+              syncSkillQuery(event.target.value, event.target.selectionStart ?? 0);
+            }}
+            onClick={(event) =>
+              syncSkillQuery(event.currentTarget.value, event.currentTarget.selectionStart ?? 0)
+            }
+            onBlur={() => setSkillQuery(null)}
             onKeyDown={(event) => {
+              // While the typeahead is open it owns the arrow/enter keys.
+              if (skillQuery && skillMatches.length > 0) {
+                if (event.key === "ArrowDown") {
+                  event.preventDefault();
+                  setSkillHighlight((index) => (index + 1) % skillMatches.length);
+                  return;
+                }
+                if (event.key === "ArrowUp") {
+                  event.preventDefault();
+                  setSkillHighlight(
+                    (index) => (index - 1 + skillMatches.length) % skillMatches.length,
+                  );
+                  return;
+                }
+                if (event.key === "Enter" || event.key === "Tab") {
+                  event.preventDefault();
+                  chooseSkill(skillMatches[skillHighlight]);
+                  return;
+                }
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  setSkillQuery(null);
+                  return;
+                }
+              }
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
                 void handleSend();
@@ -173,9 +355,18 @@ export function Composer({ threadId }: { threadId: string }) {
           />
 
           <div className="flex items-center gap-1.5 px-2.5 pb-2.5">
-            <Button variant="ghost" size="icon-sm" aria-label="添加附件" className="text-muted-foreground">
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="添加图片"
+              title="添加图片"
+              className="text-muted-foreground"
+              onClick={handleAttach}
+            >
               <Plus />
             </Button>
+
+            <ReviewLauncher threadId={threadId} />
 
             <Popover open={modeMenuOpen} onOpenChange={setModeMenuOpen}>
               <PopoverTrigger asChild>
@@ -224,6 +415,8 @@ export function Composer({ threadId }: { threadId: string }) {
             </Popover>
 
             <div className="flex-1" />
+
+            <ContextMeter threadId={threadId} />
 
             {state.models.length > 0 && (
               <Popover open={modelMenuOpen} onOpenChange={setModelMenuOpen}>
@@ -312,7 +505,7 @@ export function Composer({ threadId }: { threadId: string }) {
                 className="rounded-full"
                 aria-label="发送"
                 onClick={handleSend}
-                disabled={sending || !text.trim()}
+                disabled={sending || (!text.trim() && attachments.length === 0)}
               >
                 {sending ? <Loader2 className="animate-spin" /> : <ArrowUp />}
               </Button>

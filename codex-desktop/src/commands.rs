@@ -26,8 +26,6 @@ use codex_app_server_protocol::ThreadSettingsUpdateParams;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadUnarchiveParams;
 use codex_app_server_protocol::TurnInterruptParams;
-use codex_app_server_protocol::TurnStartParams;
-use codex_app_server_protocol::UserInput;
 use codex_protocol::openai_models::ReasoningEffort;
 use serde_json::Value as JsonValue;
 use tauri::State;
@@ -401,27 +399,6 @@ pub async fn read_account_rate_limits(bridge: State<'_, AppServerBridge>) -> Cmd
 }
 
 // --- Turns ---------------------------------------------------------------
-
-#[tauri::command]
-pub async fn send_turn(
-    bridge: State<'_, AppServerBridge>,
-    thread_id: String,
-    text: String,
-) -> CmdResult<JsonValue> {
-    bridge
-        .request(ClientRequest::TurnStart {
-            request_id: bridge.next_request_id(),
-            params: TurnStartParams {
-                thread_id,
-                input: vec![UserInput::Text {
-                    text,
-                    text_elements: Vec::new(),
-                }],
-                ..Default::default()
-            },
-        })
-        .await
-}
 
 #[tauri::command]
 pub async fn interrupt_turn(

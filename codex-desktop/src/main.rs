@@ -12,6 +12,7 @@ mod approval_mode;
 mod bridge;
 mod config_settings;
 mod commands;
+mod composer;
 mod integrations;
 mod projects;
 
@@ -227,7 +228,11 @@ fn main() {
             commands::set_approval_mode,
             commands::resume_thread,
             commands::fork_thread,
-            commands::send_turn,
+            composer::send_turn,
+            composer::list_skills,
+            composer::compact_thread,
+            composer::start_review,
+            composer::context_usage,
             commands::interrupt_turn,
             commands::resolve_command_execution_approval,
             commands::resolve_file_change_approval,

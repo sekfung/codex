@@ -623,3 +623,100 @@ export interface PendingLogin {
   authUrl: string;
   error?: string | null;
 }
+
+// -- Composer input (item 1 & 2) --------------------------------------------
+// The wire shapes for `UserInput` are built in Rust (`src/composer.rs`), not
+// here: it is a `#[serde(tag = "type")]` union whose variants carry
+// differently-named fields, and hand-writing that in TS is the bug class that
+// blanked the window once already. These types are this app's *own* IPC
+// payloads, which Rust maps onto the protocol.
+
+export type ComposerAttachment =
+  | { kind: "localImage"; path: string }
+  | { kind: "remoteImage"; url: string };
+
+/// A skill referenced as `$name`. Both halves are required by
+/// `UserInput::Skill { name, path }`.
+export interface ComposerSkill {
+  name: string;
+  path: string;
+}
+
+// -- Skills (`skills/list`) --------------------------------------------------
+// `SkillMetadata` / `SkillsListEntry` (v2/plugin.rs), `rename_all = "camelCase"`.
+
+export interface SkillInterface {
+  displayName?: string;
+  shortDescription?: string;
+}
+
+export interface SkillMetadata {
+  name: string;
+  description: string;
+  shortDescription?: string;
+  interface?: SkillInterface;
+  path: string;
+  scope: string;
+  enabled: boolean;
+}
+
+export interface SkillsListEntry {
+  cwd: string;
+  skills: SkillMetadata[];
+  errors: unknown[];
+}
+
+export interface SkillsListResponse {
+  data: SkillsListEntry[];
+}
+
+/// The one-line label for a skill in the typeahead: the SKILL.json interface
+/// wins, then the legacy short description, then the full description.
+export function skillSummary(skill: SkillMetadata): string {
+  return (
+    skill.interface?.shortDescription?.trim() ||
+    skill.shortDescription?.trim() ||
+    skill.description?.trim() ||
+    ""
+  );
+}
+
+// -- Token usage (`thread/tokenUsage/updated`) -------------------------------
+// `ThreadTokenUsage` / `TokenUsageBreakdown` (v2/thread.rs). Note
+// `modelContextWindow` is `Option<i64>` — genuinely absent for some models,
+// which is why the indicator has a no-percentage fallback.
+
+export interface TokenUsageBreakdown {
+  totalTokens: number;
+  inputTokens: number;
+  cachedInputTokens: number;
+  cacheWriteInputTokens: number;
+  outputTokens: number;
+  reasoningOutputTokens: number;
+}
+
+export interface ThreadTokenUsage {
+  total: TokenUsageBreakdown;
+  last: TokenUsageBreakdown;
+  modelContextWindow: number | null;
+}
+
+/// Computed in Rust by the engine's own formula — never derived here, since it
+/// depends on an engine-owned baseline constant (ADR-0021).
+export interface ContextUsage {
+  percentRemaining: number | null;
+  usedTokens: number;
+}
+
+// -- Review (`review/start`) -------------------------------------------------
+// Flattened for IPC; `src/composer.rs` rebuilds the tagged `ReviewTarget`.
+
+/// Where the review runs. The Official App's Git settings call this
+/// "代码审查发送方式" (在此聊天中进行 / 独立).
+export type ReviewDelivery = "inline" | "detached";
+
+export type ReviewTargetInput =
+  | { kind: "uncommittedChanges" }
+  | { kind: "baseBranch"; branch: string }
+  | { kind: "commit"; sha: string; title?: string | null }
+  | { kind: "custom"; instructions: string };
