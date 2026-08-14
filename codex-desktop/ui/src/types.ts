@@ -302,9 +302,54 @@ export interface CodexConfig {
 
 /// Which config layer a key's effective value came from. Used to tell the user
 /// a setting is pinned by their organization rather than editable here.
+///
+/// `name` is NOT a string: `ConfigLayerSource` is an internally-tagged enum
+/// (`#[serde(tag = "type")]`), so it arrives as e.g.
+/// `{type: "user", file: "…", profile: null}` or `{type: "system", file: "…"}`.
+/// Typing it as a string is what made `OriginNote` render a raw object and
+/// crash the whole tree ("Objects are not valid as a React child").
+export type ConfigLayerSource =
+  | { type: "packagedDefaults"; file: string }
+  | { type: "mdm"; domain: string; key: string }
+  | { type: "system"; file: string }
+  | { type: "enterpriseManaged"; id: string; name: string }
+  | { type: "user"; file: string; profile?: string | null }
+  | { type: "project"; dotCodexFolder: string }
+  | { type: "sessionFlags" }
+  | { type: "legacyManagedConfigTomlFromFile"; file: string }
+  | { type: "legacyManagedConfigTomlFromMdm" }
+  // Forward compatibility: an unrecognized variant must degrade, not crash.
+  | { type: string; [key: string]: unknown };
+
 export interface ConfigLayerMetadata {
-  name: string;
+  name: ConfigLayerSource;
   version: string;
+}
+
+/// Human label for a config layer, or `null` for the layers that aren't worth
+/// annotating (the user's own file and the packaged defaults — those are the
+/// normal, editable cases).
+export function configLayerLabel(source: ConfigLayerSource): string | null {
+  switch (source.type) {
+    case "user":
+    case "packagedDefaults":
+      return null;
+    case "system":
+      return "系统";
+    case "mdm":
+    case "legacyManagedConfigTomlFromMdm":
+      return "设备管理 (MDM)";
+    case "enterpriseManaged":
+      return typeof source.name === "string" ? `企业配置 “${source.name}”` : "企业配置";
+    case "project":
+      return "项目 .codex";
+    case "sessionFlags":
+      return "本次启动参数";
+    case "legacyManagedConfigTomlFromFile":
+      return "托管配置文件";
+    default:
+      return source.type;
+  }
 }
 
 export interface ConfigReadResponse {
@@ -436,4 +481,145 @@ export interface AppServerEventEnvelope {
   request?: { method: string; id: unknown; params: unknown };
   skipped?: number;
   message?: string;
+}
+
+// -- MCP servers (连接) ------------------------------------------------------
+
+/// `mcpServerStatus/list` reports auth state but *not* startup state — that
+/// arrives only via `mcpServer/startupStatus/updated`, so a server that failed
+/// to start before this window opened looks healthy until it is retried.
+export type McpAuthStatus = "unknown" | "unsupported" | "notLoggedIn" | "bearerToken" | "oauth";
+
+export type McpServerStartupState = "starting" | "ready" | "failed" | "cancelled";
+
+export interface McpServerStatus {
+  name: string;
+  pluginId?: string | null;
+  serverInfo?: { name?: string; version?: string; title?: string | null } | null;
+  /// Tool name -> tool descriptor. Only the count and names are rendered.
+  tools: Record<string, unknown>;
+  resources: unknown[];
+  resourceTemplates: unknown[];
+  authStatus: McpAuthStatus;
+}
+
+export interface ListMcpServerStatusResponse {
+  data: McpServerStatus[];
+  nextCursor?: string | null;
+}
+
+/// Live startup state, accumulated from notifications rather than fetched.
+export interface McpServerRuntimeState {
+  status: McpServerStartupState;
+  error?: string | null;
+  failureReason?: string | null;
+}
+
+export interface McpServerOauthLoginResponse {
+  authorizationUrl: string;
+}
+
+// -- Hooks (钩子) ------------------------------------------------------------
+
+export type HookTrustStatus = "managed" | "untrusted" | "trusted" | "modified";
+
+export interface HookMetadata {
+  key: string;
+  eventName: string;
+  handlerType: string;
+  executionMode: string;
+  matcher?: string | null;
+  command?: string | null;
+  timeoutSec: number;
+  statusMessage?: string | null;
+  sourcePath: string;
+  source: string;
+  pluginId?: string | null;
+  displayOrder: number;
+  enabled: boolean;
+  isManaged: boolean;
+  trustStatus: HookTrustStatus;
+}
+
+export interface HooksListEntry {
+  cwd: string;
+  hooks: HookMetadata[];
+  warnings: string[];
+  errors: { path: string; message: string }[];
+}
+
+export interface HooksListResponse {
+  data: HooksListEntry[];
+}
+
+// -- Plugins (插件) ----------------------------------------------------------
+
+export type PluginAvailability = string;
+export type PluginInstallPolicy = "NOT_AVAILABLE" | "AVAILABLE" | "INSTALLED_BY_DEFAULT";
+
+export interface PluginSummary {
+  id: string;
+  name: string;
+  remotePluginId?: string | null;
+  version?: string | null;
+  localVersion?: string | null;
+  installed: boolean;
+  enabled: boolean;
+  installPolicy: PluginInstallPolicy;
+  availability?: PluginAvailability;
+  /// Present when plugin-service says the plugin can't be used. Surfaced as
+  /// plain text — this app has no upgrade or purchase path to offer.
+  disabledReason?: string | null;
+  interface?: { displayName?: string | null; description?: string | null } | null;
+  keywords?: string[];
+}
+
+export interface PluginMarketplaceEntry {
+  name: string;
+  path?: string | null;
+  interface?: { displayName?: string | null } | null;
+  plugins: PluginSummary[];
+}
+
+export interface PluginListResponse {
+  marketplaces: PluginMarketplaceEntry[];
+  marketplaceLoadErrors?: { marketplacePath: string; message: string }[];
+  featuredPluginIds?: string[];
+}
+
+export interface MarketplaceUpgradeResponse {
+  selectedMarketplaces: string[];
+  upgradedRoots: string[];
+  errors: { marketplaceName: string; message: string }[];
+}
+
+// -- Account (账户) ----------------------------------------------------------
+
+export interface AccountTokenUsageSummary {
+  lifetimeTokens?: number | null;
+  peakDailyTokens?: number | null;
+  longestRunningTurnSec?: number | null;
+  currentStreakDays?: number | null;
+  longestStreakDays?: number | null;
+}
+
+export interface GetAccountTokenUsageResponse {
+  summary: AccountTokenUsageSummary;
+  dailyUsageBuckets?: { startDate: string; tokens: number }[] | null;
+}
+
+/// `account/login/start` is a tagged union; only the `chatgpt` arm is used
+/// here. Both URL-bearing arms are kept so a device-code response can't be
+/// silently mistaken for a failure.
+export type LoginAccountResponse =
+  | { type: "chatgpt"; loginId: string; authUrl: string }
+  | { type: "chatgptDeviceCode"; loginId: string; verificationUrl: string; userCode: string }
+  | { type: "apiKey" }
+  | { type: "chatgptAuthTokens" }
+  | { type: "amazonBedrock" };
+
+export interface PendingLogin {
+  loginId: string;
+  authUrl: string;
+  error?: string | null;
 }

@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 
 import { useStore } from "../../store";
+import { configLayerLabel } from "../../types";
 import { cn } from "@/lib/utils";
 
 /// Layout primitives shared by the settings screens, so a control that is
@@ -73,10 +74,14 @@ export function SettingRow({
 export function OriginNote({ keyPath }: { keyPath: string }) {
   const { state } = useStore();
   const origin = state.configOrigins[keyPath];
-  if (!origin || origin.name === "user" || origin.name === "default") return null;
+  // `origin.name` is a tagged union, not a string — see `ConfigLayerSource`.
+  // `configLayerLabel` returns null for the layers worth no annotation (the
+  // user's own file, packaged defaults).
+  const label = origin ? configLayerLabel(origin.name) : null;
+  if (!label) return null;
   return (
     <span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-      来自 {origin.name} 配置层
+      来自{label}配置层
     </span>
   );
 }

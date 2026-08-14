@@ -12,6 +12,7 @@ mod approval_mode;
 mod bridge;
 mod config_settings;
 mod commands;
+mod integrations;
 mod projects;
 
 use std::sync::Arc;
@@ -240,6 +241,21 @@ fn main() {
             config_settings::set_default_approval_mode,
             config_settings::config_file_path,
             config_settings::open_path_in_os,
+            integrations::list_mcp_servers,
+            integrations::mcp_server_login,
+            integrations::reload_mcp_servers,
+            integrations::list_hooks,
+            integrations::list_plugins,
+            integrations::list_installed_plugins,
+            integrations::install_plugin,
+            integrations::uninstall_plugin,
+            integrations::add_marketplace,
+            integrations::remove_marketplace,
+            integrations::upgrade_marketplace,
+            integrations::read_account_usage,
+            integrations::start_account_login,
+            integrations::cancel_account_login,
+            integrations::logout_account,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Codex Desktop");

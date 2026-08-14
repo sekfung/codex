@@ -8,7 +8,14 @@ import type {
   ConfigRequirementsReadResponse,
   GetAccountRateLimitsResponse,
   GetAccountResponse,
+  GetAccountTokenUsageResponse,
+  HooksListResponse,
+  ListMcpServerStatusResponse,
+  LoginAccountResponse,
+  MarketplaceUpgradeResponse,
+  McpServerOauthLoginResponse,
   ModelListResponse,
+  PluginListResponse,
   Project,
   ReasoningEffort,
   SettingEdit,
@@ -153,3 +160,51 @@ export const resolvePermissionsApproval = (
 
 export const rejectApproval = (requestId: unknown, message: string) =>
   invoke<void>("reject_approval", { requestId, message });
+
+// -- MCP servers / hooks / plugins / account (settings 集成 + 编码 screens) ---
+// All of these are thin client calls onto app-server RPCs (ADR-0021).
+
+export const listMcpServers = () => invoke<ListMcpServerStatusResponse>("list_mcp_servers");
+export const mcpServerLogin = (name: string) =>
+  invoke<McpServerOauthLoginResponse>("mcp_server_login", { name });
+export const reloadMcpServers = () => invoke<unknown>("reload_mcp_servers");
+
+export const listHooks = () => invoke<HooksListResponse>("list_hooks");
+
+export const listPlugins = (cwds?: string[], forceRefetch?: boolean) =>
+  invoke<PluginListResponse>("list_plugins", {
+    cwds: cwds ?? null,
+    forceRefetch: forceRefetch ?? false,
+  });
+export const listInstalledPlugins = (cwds?: string[]) =>
+  invoke<PluginListResponse>("list_installed_plugins", { cwds: cwds ?? null });
+export const installPlugin = (
+  pluginName: string,
+  marketplacePath?: string | null,
+  remoteMarketplaceName?: string | null,
+) =>
+  invoke<unknown>("install_plugin", {
+    pluginName,
+    marketplacePath: marketplacePath ?? null,
+    remoteMarketplaceName: remoteMarketplaceName ?? null,
+  });
+export const uninstallPlugin = (pluginId: string) =>
+  invoke<unknown>("uninstall_plugin", { pluginId });
+export const addMarketplace = (source: string, refName?: string | null) =>
+  invoke<unknown>("add_marketplace", { source, refName: refName ?? null });
+export const removeMarketplace = (marketplaceName: string) =>
+  invoke<unknown>("remove_marketplace", { marketplaceName });
+export const upgradeMarketplace = (marketplaceName?: string | null) =>
+  invoke<MarketplaceUpgradeResponse>("upgrade_marketplace", {
+    marketplaceName: marketplaceName ?? null,
+  });
+
+export const readAccountUsage = () =>
+  invoke<GetAccountTokenUsageResponse>("read_account_usage");
+/// Sign-in and sign-out only. Nothing here touches billing or credits —
+/// `account/rateLimitResetCredit/consume` and the add-credits nudge exist in
+/// the protocol and are deliberately not wrapped.
+export const startAccountLogin = () => invoke<LoginAccountResponse>("start_account_login");
+export const cancelAccountLogin = (loginId: string) =>
+  invoke<unknown>("cancel_account_login", { loginId });
+export const logoutAccount = () => invoke<unknown>("logout_account");

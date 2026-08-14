@@ -19,6 +19,10 @@ import { useStore } from "../../store";
 import { GeneralSettings } from "./GeneralSettings";
 import { AppearanceSettings } from "./AppearanceSettings";
 import { ConfigSettings } from "./ConfigSettings";
+import { AccountSettings } from "./AccountSettings";
+import { ConnectionsSettings } from "./ConnectionsSettings";
+import { HooksSettings } from "./HooksSettings";
+import { PluginsSettings } from "./PluginsSettings";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -50,20 +54,20 @@ const NAV_GROUPS: NavGroup[] = [
       { id: "config", label: "配置", Icon: Sliders, ready: true },
       { id: "keyboard", label: "键盘快捷键", Icon: Keyboard },
       { id: "usage", label: "使用情况和计费", Icon: CreditCard },
-      { id: "account", label: "账户", Icon: User },
+      { id: "account", label: "账户", Icon: User, ready: true },
     ],
   },
   {
     label: "集成",
     items: [
-      { id: "plugins", label: "插件", Icon: Blocks },
-      { id: "connections", label: "连接", Icon: Plug },
+      { id: "plugins", label: "插件", Icon: Blocks, ready: true },
+      { id: "connections", label: "连接", Icon: Plug, ready: true },
     ],
   },
   {
     label: "编码",
     items: [
-      { id: "hooks", label: "钩子", Icon: Webhook },
+      { id: "hooks", label: "钩子", Icon: Webhook, ready: true },
       { id: "git", label: "Git", Icon: GitBranch },
       { id: "environment", label: "环境", Icon: Terminal },
     ],
@@ -155,6 +159,10 @@ export function SettingsShell() {
           {active === "general" && <GeneralSettings />}
           {active === "appearance" && <AppearanceSettings />}
           {active === "config" && <ConfigSettings />}
+          {active === "account" && <AccountSettings />}
+          {active === "plugins" && <PluginsSettings />}
+          {active === "connections" && <ConnectionsSettings />}
+          {active === "hooks" && <HooksSettings />}
         </div>
       </main>
     </div>

@@ -30,6 +30,8 @@ import type {
   ThreadSummary,
   Turn,
   TurnStatus,
+  McpServerRuntimeState,
+  PendingLogin,
 } from "./types";
 
 /// Whether this thread's pre-existing history has been pulled in via
@@ -138,6 +140,13 @@ interface State {
   modelSelection: ModelSelection;
   /// Composer override tracking, mirroring `approvalModeOverridden`.
   modelSelectionOverridden: boolean;
+  /// Live MCP startup state, keyed by server name. `mcpServerStatus/list`
+  /// reports auth status but not startup state, so this can only be
+  /// accumulated from `mcpServer/startupStatus/updated` — a server that
+  /// failed before this window opened has no entry here.
+  mcpRuntime: Record<string, McpServerRuntimeState>;
+  /// In-flight ChatGPT sign-in. Cleared by `account/login/completed`.
+  pendingLogin: PendingLogin | null;
 }
 
 type Action =
@@ -198,7 +207,10 @@ type Action =
       defaultApprovalMode: ApprovalMode | null;
     }
   | { type: "CONFIG_REQUIREMENTS_LOADED"; requirements: ConfigRequirements | null }
-  | { type: "SETTINGS_SCREEN_SET"; screen: string | null };
+  | { type: "SETTINGS_SCREEN_SET"; screen: string | null }
+  | { type: "MCP_RUNTIME_UPDATED"; name: string; runtime: McpServerRuntimeState }
+  | { type: "LOGIN_STARTED"; login: PendingLogin }
+  | { type: "LOGIN_COMPLETED"; error: string | null };
 
 function withThread(state: State, threadId: string, update: (thread: ThreadState) => ThreadState): State {
   const current = state.threads[threadId] ?? emptyThread();
@@ -568,6 +580,23 @@ function reducer(state: State, action: Action): State {
       return { ...state, configRequirements: action.requirements };
     case "SETTINGS_SCREEN_SET":
       return { ...state, settingsScreen: action.screen };
+    case "MCP_RUNTIME_UPDATED":
+      return {
+        ...state,
+        mcpRuntime: { ...state.mcpRuntime, [action.name]: action.runtime },
+      };
+    case "LOGIN_STARTED":
+      return { ...state, pendingLogin: action.login };
+    case "LOGIN_COMPLETED":
+      // Keep the panel up with the reason on failure; clear it on success.
+      return {
+        ...state,
+        pendingLogin: action.error
+          ? state.pendingLogin
+            ? { ...state.pendingLogin, error: action.error }
+            : null
+          : null,
+      };
     default:
       return state;
   }
@@ -600,6 +629,8 @@ const initialState: State = {
   // server decide".
   modelSelection: { model: null, effort: null },
   modelSelectionOverridden: false,
+  mcpRuntime: {},
+  pendingLogin: null,
 };
 
 interface StoreValue {
@@ -632,6 +663,12 @@ interface StoreValue {
   setDefaultApprovalMode: (mode: ApprovalMode) => Promise<void>;
   writeSetting: (edit: SettingEdit) => Promise<void>;
   reloadConfig: () => Promise<void>;
+  /// Account sign-in / sign-out (账户 screen). Read-only elsewhere: this app
+  /// has no billing, upgrade or credit-purchase path anywhere.
+  startLogin: () => Promise<void>;
+  cancelLogin: () => Promise<void>;
+  logout: () => Promise<void>;
+  refreshAccount: () => void;
 }
 
 const StoreContext = createContext<StoreValue | null>(null);
@@ -667,6 +704,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const modelSelectionRef = useRef<ModelSelection>(initialState.modelSelection);
   modelSelectionRef.current = state.modelSelection;
+  // Read at call time so cancelling targets the login that is actually in
+  // flight, not one captured when the callback was created.
+  const pendingLoginRef = useRef<PendingLogin | null>(null);
+  pendingLoginRef.current = state.pendingLogin;
 
   useEffect(() => {
     api.listProjects().then((projects) => dispatch({ type: "PROJECTS_LOADED", projects }));
@@ -996,6 +1037,50 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     await api.interruptTurn(threadId, turnId);
   }, []);
 
+  /// Starts ChatGPT sign-in and opens the returned URL. `account/login/start`
+  /// only *begins* the flow — completion arrives as
+  /// `account/login/completed`, which is what clears `pendingLogin`.
+  const startLogin = useCallback(async () => {
+    const response = await api.startAccountLogin();
+    if (response.type === "chatgpt") {
+      dispatch({
+        type: "LOGIN_STARTED",
+        login: { loginId: response.loginId, authUrl: response.authUrl, error: null },
+      });
+      // Reuses the OS handler already used for `config.toml`; `open`/`start`/
+      // `xdg-open` all take URLs as readily as paths.
+      await api.openPathInOs(response.authUrl);
+      return;
+    }
+    if (response.type === "chatgptDeviceCode") {
+      dispatch({
+        type: "LOGIN_STARTED",
+        login: {
+          loginId: response.loginId,
+          authUrl: response.verificationUrl,
+          error: `请在浏览器中输入代码：${response.userCode}`,
+        },
+      });
+      await api.openPathInOs(response.verificationUrl);
+      return;
+    }
+    // The remaining arms complete server-side with no URL to visit.
+    dispatch({ type: "LOGIN_COMPLETED", error: null });
+    refetchAccount();
+  }, [refetchAccount]);
+
+  const cancelLogin = useCallback(async () => {
+    const loginId = pendingLoginRef.current?.loginId;
+    if (!loginId) return;
+    await api.cancelAccountLogin(loginId);
+    dispatch({ type: "LOGIN_COMPLETED", error: null });
+  }, []);
+
+  const logout = useCallback(async () => {
+    await api.logoutAccount();
+    refetchAccount();
+  }, [refetchAccount]);
+
   const value = useMemo<StoreValue>(
     () => ({
       state,
@@ -1022,6 +1107,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setDefaultApprovalMode,
       writeSetting,
       reloadConfig,
+      startLogin,
+      cancelLogin,
+      logout,
+      refreshAccount: refetchAccount,
     }),
     [
       state,
@@ -1047,6 +1136,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setDefaultApprovalMode,
       writeSetting,
       reloadConfig,
+      startLogin,
+      cancelLogin,
+      logout,
+      refetchAccount,
     ],
   );
 
@@ -1189,6 +1282,48 @@ function handleNotification(
     dispatch({
       type: "RATE_LIMITS_MERGED",
       rateLimits: p.rateLimits as RateLimitSnapshot,
+    });
+    return;
+  }
+  if (method === "account/login/completed") {
+    // `success: false` carries the reason; either way the account itself has
+    // to be re-read, since the notification never carries identity.
+    dispatch({
+      type: "LOGIN_COMPLETED",
+      error: p.success === true ? null : String(p.error ?? "登录未完成"),
+    });
+    effects.refetchAccount();
+    return;
+  }
+
+  // MCP startup state. The only source for this — `mcpServerStatus/list`
+  // reports auth status but never whether the server actually came up.
+  if (method === "mcpServer/startupStatus/updated") {
+    dispatch({
+      type: "MCP_RUNTIME_UPDATED",
+      name: String(p.name),
+      runtime: {
+        status: String(p.status) as McpServerRuntimeState["status"],
+        error: typeof p.error === "string" ? p.error : null,
+        failureReason: typeof p.failureReason === "string" ? p.failureReason : null,
+      },
+    });
+    return;
+  }
+  if (method === "mcpServer/oauthLogin/completed") {
+    // Login result folds into the same runtime map: a failed OAuth login is
+    // exactly the state the 连接 screen needs to surface.
+    dispatch({
+      type: "MCP_RUNTIME_UPDATED",
+      name: String(p.name),
+      runtime:
+        p.success === true
+          ? { status: "ready", error: null, failureReason: null }
+          : {
+              status: "failed",
+              error: String(p.error ?? "OAuth 登录失败"),
+              failureReason: null,
+            },
     });
   }
 }

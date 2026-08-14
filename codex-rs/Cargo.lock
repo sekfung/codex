@@ -3107,6 +3107,7 @@ dependencies = [
  "codex-exec-server",
  "codex-feedback",
  "codex-protocol",
+ "codex-utils-absolute-path",
  "codex-utils-approval-presets",
  "codex-utils-home-dir",
  "pretty_assertions",
