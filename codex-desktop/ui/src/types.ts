@@ -734,3 +734,66 @@ export type ReviewTargetInput =
   | { kind: "baseBranch"; branch: string }
   | { kind: "commit"; sha: string; title?: string | null }
   | { kind: "custom"; instructions: string };
+
+// -- Queue (`thread/queue/*`) ------------------------------------------------
+// Flattened by `src/thread_ops.rs`: a queued submission carries the same
+// `Vec<UserInput>` a turn does, and that union is not hand-written here.
+
+export interface QueuedSubmissionView {
+  id: string;
+  text: string;
+  attachmentCount: number;
+  skillNames: string[];
+}
+
+// -- Background terminals (`thread/backgroundTerminals/*`) -------------------
+
+export interface BackgroundTerminalView {
+  processId: string;
+  itemId: string;
+  command: string;
+  cwd: string;
+  osPid: number | null;
+  cpuPercent: number | null;
+  rssKb: number | null;
+}
+
+// -- Thread goal (`thread/goal/*`) -------------------------------------------
+
+/// The engine's own lifecycle for a goal — `usageLimited`/`budgetLimited` are
+/// set by the engine when a goal exhausts its allowance, not chosen by a user.
+export type ThreadGoalStatus =
+  | "active"
+  | "paused"
+  | "blocked"
+  | "usageLimited"
+  | "budgetLimited"
+  | "complete";
+
+export interface ThreadGoal {
+  threadId: string;
+  objective: string;
+  status: ThreadGoalStatus;
+  tokenBudget: number | null;
+  tokensUsed: number;
+  timeUsedSeconds: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ThreadGoalGetResponse {
+  goal: ThreadGoal | null;
+}
+
+export interface ThreadGoalSetResponse {
+  goal: ThreadGoal;
+}
+
+/// `ThreadGoalSetParams::token_budget` is an `Option<Option<i64>>`: absent
+/// means "leave alone" and an explicit null means "clear". JSON `null` alone
+/// cannot express both, so the intent is named instead and `src/thread_ops.rs`
+/// maps it back onto the double option.
+export type TokenBudgetEdit =
+  | { kind: "unchanged" }
+  | { kind: "clear" }
+  | { kind: "set"; tokens: number };

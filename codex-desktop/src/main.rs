@@ -15,6 +15,7 @@ mod commands;
 mod composer;
 mod integrations;
 mod projects;
+mod thread_ops;
 
 use std::sync::Arc;
 
@@ -234,6 +235,18 @@ fn main() {
             composer::compact_thread,
             composer::start_review,
             composer::context_usage,
+            thread_ops::queue_add,
+            thread_ops::queue_list,
+            thread_ops::queue_update,
+            thread_ops::queue_delete,
+            thread_ops::queue_move,
+            thread_ops::queue_start,
+            thread_ops::background_terminals_list,
+            thread_ops::background_terminal_terminate,
+            thread_ops::background_terminals_clean,
+            thread_ops::goal_get,
+            thread_ops::goal_set,
+            thread_ops::goal_clear,
             commands::interrupt_turn,
             commands::resolve_command_execution_approval,
             commands::resolve_file_change_approval,

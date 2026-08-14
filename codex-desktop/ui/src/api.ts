@@ -4,6 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import type {
   AppServerEventEnvelope,
   ApprovalMode,
+  BackgroundTerminalView,
   ComposerAttachment,
   ComposerSkill,
   ConfigReadResponse,
@@ -21,14 +22,19 @@ import type {
   ModelListResponse,
   PluginListResponse,
   Project,
+  QueuedSubmissionView,
   ReasoningEffort,
   ReviewDelivery,
   ReviewTargetInput,
   SettingEdit,
   SkillsListResponse,
+  ThreadGoalGetResponse,
+  ThreadGoalSetResponse,
+  ThreadGoalStatus,
   ThreadListResponse,
   ThreadResumeResponse,
   ThreadSearchResponse,
+  TokenBudgetEdit,
 } from "./types";
 
 /// `thread/fork` returns the same envelope shape as resume, plus more fields
@@ -276,3 +282,73 @@ export const startAccountLogin = () => invoke<LoginAccountResponse>("start_accou
 export const cancelAccountLogin = (loginId: string) =>
   invoke<unknown>("cancel_account_login", { loginId });
 export const logoutAccount = () => invoke<unknown>("logout_account");
+
+// -- Queue (`thread/queue/*`) ------------------------------------------------
+//
+// The engine drains this queue itself: `QueuedItemService` auto-dispatches the
+// head of the queue whenever a thread goes idle for any cause except an
+// interrupt (`ext/queue/src/service.rs`). So nothing here calls `queueStart`
+// on turn completion — that would race the engine's own dispatch. It is only
+// correct after an interrupt, which is the case the engine deliberately skips.
+
+export const queueAdd = (
+  threadId: string,
+  text: string,
+  attachments: ComposerAttachment[] = [],
+  skills: ComposerSkill[] = [],
+) => invoke<unknown>("queue_add", { threadId, text, attachments, skills });
+
+export const queueList = (threadId: string) =>
+  invoke<QueuedSubmissionView[]>("queue_list", { threadId });
+
+export const queueUpdate = (threadId: string, queuedSubmissionId: string, text: string) =>
+  invoke<unknown>("queue_update", { threadId, queuedSubmissionId, text });
+
+export const queueDelete = (threadId: string, queuedSubmissionId: string) =>
+  invoke<unknown>("queue_delete", { threadId, queuedSubmissionId });
+
+/// `thread/queue/reorder` expressed as a move. The RPC wants a complete
+/// ordering; deriving it from a move is index arithmetic that is quietly wrong
+/// at the ends, so it lives in Rust under test (`reorder_ids`).
+export const queueMove = (
+  threadId: string,
+  queuedSubmissionIds: string[],
+  queuedSubmissionId: string,
+  delta: number,
+) => invoke<unknown>("queue_move", { threadId, queuedSubmissionIds, queuedSubmissionId, delta });
+
+/// Manual dispatch. Only meaningful when the thread is idle *and* the engine
+/// skipped its own dispatch, i.e. after an interrupt.
+export const queueStart = (threadId: string, queuedSubmissionId?: string | null) =>
+  invoke<unknown>("queue_start", { threadId, queuedSubmissionId: queuedSubmissionId ?? null });
+
+// -- Background terminals (`thread/backgroundTerminals/*`) -------------------
+
+export const backgroundTerminalsList = (threadId: string) =>
+  invoke<BackgroundTerminalView[]>("background_terminals_list", { threadId });
+
+export const backgroundTerminalTerminate = (threadId: string, processId: string) =>
+  invoke<unknown>("background_terminal_terminate", { threadId, processId });
+
+export const backgroundTerminalsClean = (threadId: string) =>
+  invoke<unknown>("background_terminals_clean", { threadId });
+
+// -- Thread goal (`thread/goal/*`) -------------------------------------------
+
+export const goalGet = (threadId: string) =>
+  invoke<ThreadGoalGetResponse>("goal_get", { threadId });
+
+export const goalSet = (
+  threadId: string,
+  objective?: string | null,
+  status?: ThreadGoalStatus | null,
+  tokenBudget?: TokenBudgetEdit | null,
+) =>
+  invoke<ThreadGoalSetResponse>("goal_set", {
+    threadId,
+    objective: objective ?? null,
+    status: status ?? null,
+    tokenBudget: tokenBudget ?? null,
+  });
+
+export const goalClear = (threadId: string) => invoke<unknown>("goal_clear", { threadId });

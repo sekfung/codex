@@ -7,9 +7,11 @@ import {
   FileText,
   Folder,
   Hand,
+  ListPlus,
   Loader2,
   Paperclip,
   Plus,
+  Target,
   ShieldCheck,
   Square,
   X,
@@ -28,6 +30,9 @@ import type {
 } from "../types";
 import { skillSummary } from "../types";
 import { ContextMeter } from "./ContextMeter";
+import { BackgroundTerminals } from "./BackgroundTerminals";
+import { GoalPanel } from "./GoalPanel";
+import { QueuePanel } from "./QueuePanel";
 import { ReviewLauncher } from "./ReviewLauncher";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -110,8 +115,15 @@ function activeMentionQuery(
 // ADR-0016 layer 1: a persistent mode selector, separate from the per-item
 // approval cards in ChatStream.
 export function Composer({ threadId }: { threadId: string }) {
-  const { state, sendMessage, setApprovalMode, setModelSelection, interruptActiveTurn } =
-    useStore();
+  const {
+    state,
+    sendMessage,
+    queueMessage,
+    setApprovalMode,
+    setModelSelection,
+    interruptActiveTurn,
+  } = useStore();
+  const [goalEditorOpen, setGoalEditorOpen] = useState(false);
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   /// Skills the user picked from the typeahead this message. The `$name` token
@@ -219,6 +231,54 @@ export function Composer({ threadId }: { threadId: string }) {
   /// This mirrors the TUI's `insert_selected_path`, which likewise inserts the
   /// path alone and records no structured item — files ride in the message
   /// text, unlike skills.
+  /// Entries in the `@` menu.
+  ///
+  /// The Official App's `@` opens a unified insertion menu, not a file picker:
+  /// an 添加 section (files and folders, 目标, 计划模式) sits above the file
+  /// results. Only the 目标 entry is implemented here — 计划模式 and the
+  /// 插件 / ChatGPT 对话 sections are separate capabilities, and one of them
+  /// (cross-conversation references) has no basis in this engine at all.
+  ///
+  /// Goal and file results share one flat list so arrow keys move through the
+  /// menu as a whole rather than through two lists that each think they own
+  /// the caret.
+  type MentionEntry = { kind: "goal" } | { kind: "file"; hit: FileSearchHit };
+
+  const mentionEntries: MentionEntry[] = useMemo(() => {
+    if (!fileQuery) return [];
+    const query = fileQuery.query.toLowerCase();
+    const entries: MentionEntry[] = [];
+    // The goal entry is a command, not a search result, so it matches on its
+    // own name rather than being filtered out by a path search.
+    if (query === "" || "目标goal".includes(query)) {
+      entries.push({ kind: "goal" });
+    }
+    for (const hit of fileMatches) {
+      entries.push({ kind: "file", hit });
+    }
+    return entries;
+  }, [fileQuery, fileMatches]);
+
+  /// Removes the `@token` the menu was triggered from, without inserting
+  /// anything — used when the chosen entry opens a panel instead of producing
+  /// text.
+  function consumeMentionToken() {
+    if (!fileQuery) return;
+    const caret = textareaRef.current?.selectionStart ?? text.length;
+    setText(`${text.slice(0, fileQuery.start)}${text.slice(caret)}`);
+    setFileQuery(null);
+    setFileMatches([]);
+  }
+
+  function chooseMentionEntry(entry: MentionEntry) {
+    if (entry.kind === "goal") {
+      consumeMentionToken();
+      setGoalEditorOpen(true);
+      return;
+    }
+    chooseFile(entry.hit);
+  }
+
   function chooseFile(hit: FileSearchHit) {
     if (!fileQuery) return;
     const caret = textareaRef.current?.selectionStart ?? text.length;
@@ -260,13 +320,24 @@ export function Composer({ threadId }: { threadId: string }) {
     ]);
   }
 
+  /// Sends, or queues when a turn is already running.
+  ///
+  /// Queuing is not a client-side buffer: `thread/queue/add` hands the
+  /// submission to the engine, which dispatches it itself when the turn ends
+  /// (`QueuedItemService::on_thread_idle`). Nothing here starts queued work —
+  /// doing so on turn completion would race the engine's own dispatch and
+  /// could run a submission twice.
   async function handleSend() {
     const trimmed = text.trim();
     // An image with no caption is a real message, so attachments alone can send.
     if ((!trimmed && attachments.length === 0) || sending) return;
     setSending(true);
     try {
-      await sendMessage(threadId, trimmed, attachments, activeSkills);
+      if (turnRunning) {
+        await queueMessage(threadId, trimmed, attachments, activeSkills);
+      } else {
+        await sendMessage(threadId, trimmed, attachments, activeSkills);
+      }
       setText("");
       setAttachments([]);
       setPickedSkills([]);
@@ -325,6 +396,13 @@ export function Composer({ threadId }: { threadId: string }) {
           </div>
         )}
 
+        <GoalPanel
+          threadId={threadId}
+          editorOpen={goalEditorOpen}
+          onEditorOpenChange={setGoalEditorOpen}
+        />
+        <QueuePanel threadId={threadId} />
+
         <div className="relative rounded-2xl border border-border bg-card shadow-sm focus-within:border-ring/50">
           {skillQuery && skillMatches.length > 0 && (
             <div className="absolute bottom-full left-3 z-20 mb-2 w-96 overflow-hidden rounded-xl border border-border bg-popover p-1 shadow-lg">
@@ -356,36 +434,69 @@ export function Composer({ threadId }: { threadId: string }) {
             </div>
           )}
 
-          {fileQuery && fileMatches.length > 0 && (
+          {fileQuery && mentionEntries.length > 0 && (
             <div className="absolute bottom-full left-3 z-20 mb-2 w-96 overflow-hidden rounded-xl border border-border bg-popover p-1 shadow-lg">
-              <div className="px-2 py-1 text-[11px] text-muted-foreground">文件</div>
-              {fileMatches.map((hit, index) => (
-                <button
-                  key={`${hit.root}/${hit.path}`}
-                  type="button"
-                  onMouseDown={(event) => {
-                    // mousedown, not click: the textarea must not lose focus
-                    // before we can restore the caret.
-                    event.preventDefault();
-                    chooseFile(hit);
-                  }}
-                  onMouseEnter={() => setFileHighlight(index)}
-                  className={cn(
-                    "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left",
-                    index === fileHighlight ? "bg-accent" : "hover:bg-accent/60",
-                  )}
-                >
-                  {hit.isDirectory ? (
-                    <Folder className="size-3.5 shrink-0 text-muted-foreground" />
-                  ) : (
-                    <FileText className="size-3.5 shrink-0 text-muted-foreground" />
-                  )}
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[13px] font-medium">{hit.fileName}</span>
-                    <span className="block truncate text-xs text-muted-foreground">{hit.path}</span>
-                  </span>
-                </button>
-              ))}
+              {mentionEntries.map((entry, index) => {
+                const highlighted = index === fileHighlight;
+                // Section headers are rendered inline with their first entry
+                // so the flat keyboard list and the visual grouping stay in
+                // sync automatically.
+                const header =
+                  entry.kind === "goal"
+                    ? "添加"
+                    : mentionEntries[index - 1]?.kind !== "file"
+                      ? "文件"
+                      : null;
+                return (
+                  <div key={entry.kind === "goal" ? "goal" : `${entry.hit.root}/${entry.hit.path}`}>
+                    {header && (
+                      <div className="px-2 py-1 text-[11px] text-muted-foreground">{header}</div>
+                    )}
+                    <button
+                      type="button"
+                      onMouseDown={(event) => {
+                        // mousedown, not click: the textarea must not lose
+                        // focus before we can restore the caret.
+                        event.preventDefault();
+                        chooseMentionEntry(entry);
+                      }}
+                      onMouseEnter={() => setFileHighlight(index)}
+                      className={cn(
+                        "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left",
+                        highlighted ? "bg-accent" : "hover:bg-accent/60",
+                      )}
+                    >
+                      {entry.kind === "goal" ? (
+                        <>
+                          <Target className="size-3.5 shrink-0 text-muted-foreground" />
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-[13px] font-medium">目标</span>
+                            <span className="block truncate text-xs text-muted-foreground">
+                              设置要持续追求的目标
+                            </span>
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          {entry.hit.isDirectory ? (
+                            <Folder className="size-3.5 shrink-0 text-muted-foreground" />
+                          ) : (
+                            <FileText className="size-3.5 shrink-0 text-muted-foreground" />
+                          )}
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-[13px] font-medium">
+                              {entry.hit.fileName}
+                            </span>
+                            <span className="block truncate text-xs text-muted-foreground">
+                              {entry.hit.path}
+                            </span>
+                          </span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                );
+              })}
             </div>
           )}
 
@@ -438,22 +549,22 @@ export function Composer({ threadId }: { threadId: string }) {
               // While a typeahead is open it owns the arrow/enter keys. Only
               // one can be open at a time: the two sigils can't both start the
               // token at the caret.
-              if (fileQuery && fileMatches.length > 0) {
+              if (fileQuery && mentionEntries.length > 0) {
                 if (event.key === "ArrowDown") {
                   event.preventDefault();
-                  setFileHighlight((index) => (index + 1) % fileMatches.length);
+                  setFileHighlight((index) => (index + 1) % mentionEntries.length);
                   return;
                 }
                 if (event.key === "ArrowUp") {
                   event.preventDefault();
                   setFileHighlight(
-                    (index) => (index - 1 + fileMatches.length) % fileMatches.length,
+                    (index) => (index - 1 + mentionEntries.length) % mentionEntries.length,
                   );
                   return;
                 }
                 if (event.key === "Enter" || event.key === "Tab") {
                   event.preventDefault();
-                  chooseFile(fileMatches[fileHighlight]);
+                  chooseMentionEntry(mentionEntries[fileHighlight]);
                   return;
                 }
                 if (event.key === "Escape") {
@@ -506,6 +617,8 @@ export function Composer({ threadId }: { threadId: string }) {
             </Button>
 
             <ReviewLauncher threadId={threadId} />
+
+            <BackgroundTerminals threadId={threadId} />
 
             <Popover open={modeMenuOpen} onOpenChange={setModeMenuOpen}>
               <PopoverTrigger asChild>
@@ -626,7 +739,11 @@ export function Composer({ threadId }: { threadId: string }) {
               </Popover>
             )}
 
-            {turnRunning ? (
+            {/* While a turn runs both actions stay reachable: stopping and
+                queuing the next instruction are independent intents, and
+                collapsing them into one button would make whichever lost
+                unreachable exactly when it is wanted. */}
+            {turnRunning && (
               <Button
                 size="icon-sm"
                 variant="secondary"
@@ -638,17 +755,23 @@ export function Composer({ threadId }: { threadId: string }) {
               >
                 {interrupting ? <Loader2 className="animate-spin" /> : <Square className="size-3" />}
               </Button>
-            ) : (
-              <Button
-                size="icon-sm"
-                className="rounded-full"
-                aria-label="发送"
-                onClick={handleSend}
-                disabled={sending || (!text.trim() && attachments.length === 0)}
-              >
-                {sending ? <Loader2 className="animate-spin" /> : <ArrowUp />}
-              </Button>
             )}
+            <Button
+              size="icon-sm"
+              className="rounded-full"
+              aria-label={turnRunning ? "加入队列" : "发送"}
+              title={turnRunning ? "加入队列，当前回合结束后自动执行" : undefined}
+              onClick={handleSend}
+              disabled={sending || (!text.trim() && attachments.length === 0)}
+            >
+              {sending ? (
+                <Loader2 className="animate-spin" />
+              ) : turnRunning ? (
+                <ListPlus />
+              ) : (
+                <ArrowUp />
+              )}
+            </Button>
           </div>
         </div>
 

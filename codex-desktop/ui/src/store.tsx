@@ -13,6 +13,7 @@ import type {
   Account,
   AppServerEventEnvelope,
   ApprovalMode,
+  BackgroundTerminalView,
   CodexConfig,
   CommandExecutionItem,
   ComposerAttachment,
@@ -28,15 +29,19 @@ import type {
   PendingLogin,
   PendingPermissionsApproval,
   Project,
+  QueuedSubmissionView,
   RateLimitSnapshot,
   ReviewDelivery,
   ReviewTargetInput,
   SettingEdit,
   SkillMetadata,
+  ThreadGoal,
+  ThreadGoalStatus,
   ThreadItem,
   ThreadSearchResult,
   ThreadSummary,
   ThreadTokenUsage,
+  TokenBudgetEdit,
   Turn,
   TurnStatus,
 } from "./types";
@@ -78,6 +83,19 @@ export interface ThreadState {
   /// arriving. Compaction is not instant and rewrites history, so it needs a
   /// visible running state rather than a silent pause.
   compacting: boolean;
+  /// Submissions waiting behind the running turn (`thread/queue/list`), kept
+  /// current by `thread/queue/changed`. The engine owns dispatch — see the
+  /// note on `queueMessage` — so this is a view, never a schedule this client
+  /// executes.
+  queue: QueuedSubmissionView[];
+  /// Processes the agent left running (`thread/backgroundTerminals/list`).
+  /// Fetched on demand rather than polled: there is no notification for it,
+  /// and a background process is not something that changes second to second.
+  backgroundTerminals: BackgroundTerminalView[];
+  /// `thread/goal/get`. A goal persists across turns ("设置要持续追求的目标"),
+  /// so it is thread state rather than anything turn-scoped. `null` means the
+  /// thread has none, which is distinct from one with an empty objective.
+  goal: ThreadGoal | null;
 }
 
 function emptyThread(): ThreadState {
@@ -92,6 +110,9 @@ function emptyThread(): ThreadState {
     tokenUsage: null,
     contextUsage: null,
     compacting: false,
+    queue: [],
+    backgroundTerminals: [],
+    goal: null,
     historyStatus: "idle",
     historyError: null,
   };
@@ -181,6 +202,9 @@ type Action =
   | { type: "CONTEXT_USAGE_COMPUTED"; threadId: string; contextUsage: ContextUsage }
   | { type: "COMPACTION_STARTED"; threadId: string }
   | { type: "COMPACTION_FINISHED"; threadId: string }
+  | { type: "QUEUE_LOADED"; threadId: string; queue: QueuedSubmissionView[] }
+  | { type: "BACKGROUND_TERMINALS_LOADED"; threadId: string; terminals: BackgroundTerminalView[] }
+  | { type: "GOAL_LOADED"; threadId: string; goal: ThreadGoal | null }
   | { type: "PROJECTS_LOADED"; projects: Project[] }
   | { type: "PROJECT_ADDED"; project: Project }
   | { type: "PROJECT_REMOVED"; id: string }
@@ -417,6 +441,21 @@ function reducer(state: State, action: Action): State {
       return withThread(state, action.threadId, (thread) => ({
         ...thread,
         compacting: false,
+      }));
+    case "QUEUE_LOADED":
+      return withThread(state, action.threadId, (thread) => ({
+        ...thread,
+        queue: action.queue,
+      }));
+    case "BACKGROUND_TERMINALS_LOADED":
+      return withThread(state, action.threadId, (thread) => ({
+        ...thread,
+        backgroundTerminals: action.terminals,
+      }));
+    case "GOAL_LOADED":
+      return withThread(state, action.threadId, (thread) => ({
+        ...thread,
+        goal: action.goal,
       }));
     case "ACTIVE_THREAD_SET":
       return { ...state, activeThreadId: action.threadId };
@@ -709,6 +748,34 @@ interface StoreValue {
   ) => Promise<void>;
   refetchSkills: () => void;
   forkThreadFromTurn: (threadId: string, turnId: string) => Promise<void>;
+  /// Queue (`thread/queue/*`). `queueMessage` is what the composer calls while
+  /// a turn is running; the engine dispatches queued work itself when the turn
+  /// ends, so nothing here schedules it. `startQueuedNow` is the manual escape
+  /// hatch for the one case the engine skips — after an interrupt.
+  queueMessage: (
+    threadId: string,
+    text: string,
+    attachments?: ComposerAttachment[],
+    skills?: ComposerSkill[],
+  ) => Promise<void>;
+  refetchQueue: (threadId: string) => Promise<void>;
+  editQueued: (threadId: string, queuedSubmissionId: string, text: string) => Promise<void>;
+  removeQueued: (threadId: string, queuedSubmissionId: string) => Promise<void>;
+  moveQueued: (threadId: string, queuedSubmissionId: string, delta: number) => Promise<void>;
+  startQueuedNow: (threadId: string, queuedSubmissionId?: string) => Promise<void>;
+  /// Background terminals (`thread/backgroundTerminals/*`).
+  refetchBackgroundTerminals: (threadId: string) => Promise<void>;
+  terminateBackgroundTerminal: (threadId: string, processId: string) => Promise<void>;
+  cleanBackgroundTerminals: (threadId: string) => Promise<void>;
+  /// Thread goal (`thread/goal/*`).
+  refetchGoal: (threadId: string) => Promise<void>;
+  setGoal: (
+    threadId: string,
+    objective?: string | null,
+    status?: ThreadGoalStatus | null,
+    tokenBudget?: TokenBudgetEdit | null,
+  ) => Promise<void>;
+  clearGoal: (threadId: string) => Promise<void>;
   /// Thread management. Each is a thin call onto a `thread/*` RPC (ADR-0021);
   /// the resulting list changes arrive as server notifications rather than
   /// being assumed locally.
@@ -877,6 +944,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       .catch((error) => tracingWarn(`context usage computation failed: ${String(error)}`));
   }, []);
 
+  /// Defined here rather than with the other queue actions because
+  /// `thread/queue/changed` needs it: the engine mutates the queue on its own
+  /// (it dispatches the head on turn completion), so a re-list is the only way
+  /// to stay truthful.
+  const refetchQueue = useCallback(async (threadId: string) => {
+    const queue = await api.queueList(threadId);
+    dispatch({ type: "QUEUE_LOADED", threadId, queue });
+  }, []);
+
   // Re-listed whenever the Project set changes, not just at mount: skills are
   // scanned per-cwd, and at mount the Project list has usually not loaded yet,
   // so a mount-only fetch would only ever see the session cwd.
@@ -888,13 +964,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     let unlisten: (() => void) | undefined;
     api
       .onAppServerEvent((envelope) =>
-        handleEvent(envelope, dispatch, { refetchAccount, refetchSkills, computeContextUsage }),
+        handleEvent(envelope, dispatch, {
+          refetchAccount,
+          refetchSkills,
+          computeContextUsage,
+          refetchQueue: (threadId) => {
+            refetchQueue(threadId).catch((error) =>
+              tracingWarn(`thread/queue/list failed: ${String(error)}`),
+            );
+          },
+        }),
       )
       .then((fn) => {
         unlisten = fn;
       });
     return () => unlisten?.();
-  }, [refetchAccount, refetchSkills, computeContextUsage]);
+  }, [refetchAccount, refetchSkills, computeContextUsage, refetchQueue]);
 
   useEffect(() => {
     refetchAccount();
@@ -1035,6 +1120,109 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       dispatch({ type: "COMPACTION_FINISHED", threadId });
       throw error;
     }
+  }, []);
+
+  // --- Queue ---------------------------------------------------------------
+  //
+  // Dispatch is the engine's job, not this client's. `QueuedItemService`
+  // implements `on_thread_idle` and pops the head of the queue whenever a
+  // thread goes idle for any cause except an interrupt
+  // (`ext/queue/src/service.rs`), and `enqueue` wakes an already-idle thread so
+  // it starts right away. Every mutation below therefore just edits the queue
+  // and lets `thread/queue/changed` report the result — there is deliberately
+  // no "start the next one" call on turn completion, which would race the
+  // engine and could run a submission twice.
+
+  const queueMessage = useCallback(
+    async (
+      threadId: string,
+      text: string,
+      attachments: ComposerAttachment[] = [],
+      skills: ComposerSkill[] = [],
+    ) => {
+      await api.queueAdd(threadId, text, attachments, skills);
+    },
+    [],
+  );
+
+  const editQueued = useCallback(
+    async (threadId: string, queuedSubmissionId: string, text: string) => {
+      await api.queueUpdate(threadId, queuedSubmissionId, text);
+    },
+    [],
+  );
+
+  const removeQueued = useCallback(async (threadId: string, queuedSubmissionId: string) => {
+    await api.queueDelete(threadId, queuedSubmissionId);
+  }, []);
+
+  /// The RPC takes a complete ordering; deriving it from a move is done in
+  /// Rust so the index arithmetic is under test (`reorder_ids`). The current
+  /// order is read at call time, like `interruptActiveTurn` — the queue can
+  /// move between paint and click, since the engine dispatches from it too.
+  const moveQueued = useCallback(
+    async (threadId: string, queuedSubmissionId: string, delta: number) => {
+      const ids = (threadsRef.current[threadId]?.queue ?? []).map((entry) => entry.id);
+      await api.queueMove(threadId, ids, queuedSubmissionId, delta);
+    },
+    [],
+  );
+
+  /// Manual dispatch, valid only while the thread is idle. The engine refuses
+  /// with "thread already has an active or pending turn" otherwise, which is
+  /// why the UI only offers this when nothing is running.
+  const startQueuedNow = useCallback(async (threadId: string, queuedSubmissionId?: string) => {
+    await api.queueStart(threadId, queuedSubmissionId ?? null);
+  }, []);
+
+  // --- Background terminals ------------------------------------------------
+
+  const refetchBackgroundTerminals = useCallback(async (threadId: string) => {
+    const terminals = await api.backgroundTerminalsList(threadId);
+    dispatch({ type: "BACKGROUND_TERMINALS_LOADED", threadId, terminals });
+  }, []);
+
+  const terminateBackgroundTerminal = useCallback(
+    async (threadId: string, processId: string) => {
+      await api.backgroundTerminalTerminate(threadId, processId);
+      const terminals = await api.backgroundTerminalsList(threadId);
+      dispatch({ type: "BACKGROUND_TERMINALS_LOADED", threadId, terminals });
+    },
+    [],
+  );
+
+  const cleanBackgroundTerminals = useCallback(async (threadId: string) => {
+    await api.backgroundTerminalsClean(threadId);
+    const terminals = await api.backgroundTerminalsList(threadId);
+    dispatch({ type: "BACKGROUND_TERMINALS_LOADED", threadId, terminals });
+  }, []);
+
+  // --- Goal ----------------------------------------------------------------
+
+  const refetchGoal = useCallback(async (threadId: string) => {
+    const response = await api.goalGet(threadId);
+    dispatch({ type: "GOAL_LOADED", threadId, goal: response.goal ?? null });
+  }, []);
+
+  /// Every field is a patch; omitting one leaves it alone. `tokenBudget` is
+  /// three-way rather than nullable because the protocol distinguishes "leave
+  /// alone" from "clear" (see `TokenBudgetEdit`).
+  const setGoal = useCallback(
+    async (
+      threadId: string,
+      objective?: string | null,
+      status?: ThreadGoalStatus | null,
+      tokenBudget?: TokenBudgetEdit | null,
+    ) => {
+      const response = await api.goalSet(threadId, objective, status, tokenBudget);
+      dispatch({ type: "GOAL_LOADED", threadId, goal: response.goal });
+    },
+    [],
+  );
+
+  const clearGoal = useCallback(async (threadId: string) => {
+    await api.goalClear(threadId);
+    dispatch({ type: "GOAL_LOADED", threadId, goal: null });
   }, []);
 
   /// `review/start`. A detached review runs on a *different* thread
@@ -1248,6 +1436,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       startReview,
       refetchSkills,
       forkThreadFromTurn,
+      queueMessage,
+      refetchQueue,
+      editQueued,
+      removeQueued,
+      moveQueued,
+      startQueuedNow,
+      refetchBackgroundTerminals,
+      terminateBackgroundTerminal,
+      cleanBackgroundTerminals,
+      refetchGoal,
+      setGoal,
+      clearGoal,
       renameThread,
       archiveThread,
       unarchiveThread,
@@ -1280,6 +1480,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       startReview,
       refetchSkills,
       forkThreadFromTurn,
+      queueMessage,
+      refetchQueue,
+      editQueued,
+      removeQueued,
+      moveQueued,
+      startQueuedNow,
+      refetchBackgroundTerminals,
+      terminateBackgroundTerminal,
+      cleanBackgroundTerminals,
+      refetchGoal,
+      setGoal,
+      clearGoal,
       renameThread,
       archiveThread,
       unarchiveThread,
@@ -1341,6 +1553,10 @@ interface NotificationEffects {
   /// here (ADR-0021). One call per usage notification, which fires per turn,
   /// not per token.
   computeContextUsage: (threadId: string, usage: ThreadTokenUsage) => void;
+  /// `ThreadQueueChangedNotification` carries only a thread id — like
+  /// `skills/changed` it reports *that* the queue changed, never how — so a
+  /// re-list is the only correct response.
+  refetchQueue: (threadId: string) => void;
 }
 
 function handleNotification(
@@ -1419,6 +1635,25 @@ function handleNotification(
   }
   if (method === "thread/compacted") {
     dispatch({ type: "COMPACTION_FINISHED", threadId: String(p.threadId) });
+    return;
+  }
+  // The queue is engine-owned: it changes both when this window edits it and
+  // when the engine itself dispatches the head of it on turn completion. This
+  // notification is the single source of truth for both.
+  if (method === "thread/queue/changed") {
+    effects.refetchQueue(String(p.threadId));
+    return;
+  }
+  if (method === "thread/goal/updated") {
+    dispatch({
+      type: "GOAL_LOADED",
+      threadId: String(p.threadId),
+      goal: p.goal as ThreadGoal,
+    });
+    return;
+  }
+  if (method === "thread/goal/cleared") {
+    dispatch({ type: "GOAL_LOADED", threadId: String(p.threadId), goal: null });
     return;
   }
   // `SkillsChangedNotification` is an empty struct — it says *that* skills

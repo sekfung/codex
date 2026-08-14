@@ -68,7 +68,7 @@ pub struct ComposerSkill {
 /// Assembles the turn payload in the same order the TUI does: images, then
 /// text, then skills (`chatwidget/input_submission.rs`). Order is part of what
 /// the model sees, so it is copied rather than chosen.
-fn build_turn_input(
+pub(crate) fn build_turn_input(
     text: String,
     attachments: Vec<ComposerAttachment>,
     skills: Vec<ComposerSkill>,

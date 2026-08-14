@@ -39,6 +39,9 @@ tauri-plugin-dialog = "2"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+# `thread/queue/add` requires a client message id; v7 matches what the queue
+# extension mints server-side (`ext/queue/Cargo.toml`).
+uuid = { workspace = true, features = ["v7"] }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
