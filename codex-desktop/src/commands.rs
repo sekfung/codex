@@ -23,6 +23,11 @@ use codex_app_server_protocol::ThreadSearchParams;
 use codex_app_server_protocol::ThreadSearchSortKey;
 use codex_app_server_protocol::ThreadSetNameParams;
 use codex_app_server_protocol::ThreadSettingsUpdateParams;
+// The wire enums, not the core ones of the same name: `ThreadStartParams`
+// carries `codex_app_server_protocol`'s versions, and `codex_protocol` has
+// parallel `ThreadHistoryMode`/`ThreadSource` types that do not coerce.
+use codex_app_server_protocol::ThreadHistoryMode;
+use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadUnarchiveParams;
 use codex_app_server_protocol::TurnInterruptParams;
@@ -32,6 +37,9 @@ use tauri::State;
 
 use crate::approval_mode::ApprovalMode;
 use crate::bridge::AppServerBridge;
+use crate::bridge::RequestFailure;
+use crate::history_mode::HistoryModeSupport;
+use crate::history_mode::is_history_pagination_unsupported;
 use crate::projects::Project;
 use crate::projects::ProjectStore;
 
@@ -200,6 +208,52 @@ pub async fn search_threads(
         .await
 }
 
+/// Issues `thread/start` asking for paginated history, falling back once if the
+/// server refuses.
+///
+/// Mirrors `tui/src/app_server_session.rs::request_thread_start_with_history_fallback`.
+/// The retry is what keeps the ask safe: `Paginated` is rejected outright when
+/// the thread store cannot serve paginated lists, and without a fallback that
+/// rejection would surface as "could not start a conversation" rather than as a
+/// thread with slightly fewer capabilities.
+async fn start_thread_negotiating_history(
+    bridge: &AppServerBridge,
+    history_support: &HistoryModeSupport,
+    mut params: ThreadStartParams,
+) -> CmdResult<JsonValue> {
+    if !history_support.may_request_paginated() {
+        // Already refused once this session; don't pay the round trip again.
+        return bridge
+            .request(ClientRequest::ThreadStart {
+                request_id: bridge.next_request_id(),
+                params,
+            })
+            .await;
+    }
+
+    params.history_mode = Some(ThreadHistoryMode::Paginated);
+    match bridge
+        .request_detailed(ClientRequest::ThreadStart {
+            request_id: bridge.next_request_id(),
+            params: params.clone(),
+        })
+        .await
+    {
+        Ok(started) => Ok(started),
+        Err(RequestFailure::Server(source)) if is_history_pagination_unsupported(&source) => {
+            history_support.mark_unsupported();
+            params.history_mode = None;
+            bridge
+                .request(ClientRequest::ThreadStart {
+                    request_id: bridge.next_request_id(),
+                    params,
+                })
+                .await
+        }
+        Err(failure) => Err(failure.message()),
+    }
+}
+
 /// Starts a thread, applying the composer's current approval mode (ADR-0016
 /// layer 1) and model selection at creation so the very first turn already
 /// runs under them.
@@ -209,28 +263,57 @@ pub async fn search_threads(
 /// which only reports the effort in force). So when an effort is requested it
 /// is applied with a follow-up `thread/settings/update` here, keeping this a
 /// single call from the frontend's point of view.
+///
+/// Most of `ThreadStartParams`' 25 fields are deliberately left unset. The
+/// server turns them into *overrides* on top of its own config
+/// (`build_thread_config_overrides` in `thread_processor.rs`), and this client's
+/// embedded app-server was started from the same `config.toml` the CLI reads
+/// (ADR-0008) — so omitting `model_provider`, `service_tier`, `sandbox`,
+/// `runtime_workspace_roots`, `config`, `personality` and friends yields the
+/// user's configured values, while re-deriving them here would duplicate
+/// config interpretation this crate is not allowed to own (ADR-0021).
+/// Per-thread deltas go through `thread/settings/update` instead.
+///
+/// The exceptions are the two fields that are *not* config-derived overrides:
+/// `history_mode` (see `crate::history_mode`) and `thread_source`, both of
+/// which the TUI and `exec` set explicitly.
+/// Builds the params for `thread/start`.
+///
+/// Split out so the field set is pinned by tests: an absent param is silently
+/// valid on the wire, so a field lost in a refactor produces threads that
+/// quietly differ from the CLI's rather than any visible failure.
+fn thread_start_params(
+    cwd: String,
+    resolved: Option<crate::approval_mode::ResolvedApprovalMode>,
+    model: Option<String>,
+) -> ThreadStartParams {
+    ThreadStartParams {
+        cwd: Some(cwd),
+        model,
+        approval_policy: resolved.as_ref().map(|mode| mode.approval_policy),
+        approvals_reviewer: resolved.as_ref().map(|mode| mode.approvals_reviewer),
+        permissions: resolved.map(|mode| mode.permission_profile_id),
+        // Classifies *why* the thread exists, which is not the same axis as
+        // `SessionSource::Custom("codex-desktop")` (ADR-0010, which client).
+        // Every thread this client starts is user-initiated, and both the TUI
+        // and `exec` set `User`; the field has no `Default` impl of its own.
+        thread_source: Some(ThreadSource::User),
+        ..Default::default()
+    }
+}
+
 #[tauri::command]
 pub async fn start_thread(
     bridge: State<'_, AppServerBridge>,
+    history_support: State<'_, HistoryModeSupport>,
     cwd: String,
     approval_mode: Option<ApprovalMode>,
     model: Option<String>,
     effort: Option<ReasoningEffort>,
 ) -> CmdResult<JsonValue> {
     let resolved = approval_mode.map(ApprovalMode::resolve).transpose()?;
-    let started = bridge
-        .request(ClientRequest::ThreadStart {
-            request_id: bridge.next_request_id(),
-            params: ThreadStartParams {
-                cwd: Some(cwd),
-                model,
-                approval_policy: resolved.as_ref().map(|mode| mode.approval_policy),
-                approvals_reviewer: resolved.as_ref().map(|mode| mode.approvals_reviewer),
-                permissions: resolved.map(|mode| mode.permission_profile_id),
-                ..Default::default()
-            },
-        })
-        .await?;
+    let params = thread_start_params(cwd, resolved, model);
+    let started = start_thread_negotiating_history(&bridge, &history_support, params).await?;
 
     if let Some(effort) = effort
         && let Some(thread_id) = started
@@ -473,4 +556,70 @@ pub async fn reject_approval(
 ) -> CmdResult<()> {
     let request_id = parse_request_id(request_id)?;
     bridge.reject_server_request(request_id, message).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    /// Pins the `thread/start` field set.
+    ///
+    /// The two fields checked here are the ones that are *not* config-derived
+    /// overrides, so unlike the rest they cannot be recovered from the server's
+    /// own config if they go missing — and losing either is silent. Dropping
+    /// `history_mode` in particular downgrades every new thread to `Legacy`,
+    /// which the engine then refuses to revert.
+    #[test]
+    fn thread_start_sets_the_non_override_fields() {
+        let params = thread_start_params("/repo".to_string(), None, None);
+
+        assert_eq!(params.cwd.as_deref(), Some("/repo"));
+        assert_eq!(params.thread_source, Some(ThreadSource::User));
+        // Negotiated per request rather than baked in here, so the fallback in
+        // `start_thread_negotiating_history` owns the value.
+        assert_eq!(params.history_mode, None);
+    }
+
+    /// The config-derived fields stay unset on purpose: the embedded
+    /// app-server reads the same `config.toml` (ADR-0008) and applies them as
+    /// its own defaults, so setting them here would mean this crate
+    /// interpreting config it is not allowed to own (ADR-0021).
+    #[test]
+    fn thread_start_leaves_config_derived_fields_to_the_server() {
+        let params = thread_start_params("/repo".to_string(), None, None);
+
+        assert_eq!(params.model_provider, None);
+        assert_eq!(params.service_tier, None);
+        assert_eq!(params.sandbox, None);
+        assert_eq!(params.runtime_workspace_roots, None);
+        assert_eq!(params.config, None);
+        assert_eq!(params.personality, None);
+        assert_eq!(params.developer_instructions, None);
+        assert_eq!(params.ephemeral, None);
+    }
+
+    #[test]
+    fn thread_start_carries_the_resolved_approval_mode() {
+        let resolved = ApprovalMode::HelpMeApprove
+            .resolve()
+            .expect("built-in preset should resolve");
+        let expected_profile = resolved.permission_profile_id.clone();
+        let expected_policy = resolved.approval_policy;
+        let expected_reviewer = resolved.approvals_reviewer;
+
+        let params = thread_start_params(
+            "/repo".to_string(),
+            Some(resolved),
+            Some("gpt-x".to_string()),
+        );
+
+        assert_eq!(params.model.as_deref(), Some("gpt-x"));
+        assert_eq!(params.approval_policy, Some(expected_policy));
+        assert_eq!(params.approvals_reviewer, Some(expected_reviewer));
+        assert_eq!(params.permissions, Some(expected_profile));
+        // `permissions` and `sandbox` are mutually exclusive on the wire; the
+        // server rejects a request carrying both.
+        assert_eq!(params.sandbox, None);
+    }
 }

@@ -316,10 +316,22 @@ function UserMessageView({
 /// recoverable from inside the app even though the engine retains the old
 /// rollout.
 function RevertAction({ threadId, turnId }: { threadId: string; turnId: string }) {
-  const { revertThread } = useStore();
+  const { state, revertThread } = useStore();
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // `thread/revert` is rejected outright unless the thread was created with
+  // `historyMode: "paginated"`, so a legacy thread can never be reverted — no
+  // amount of retrying changes that. Gate on the thread's own mode rather than
+  // on whether *this session* can request pagination: threads in a shared
+  // `$CODEX_HOME` (ADR-0008) come from other clients and older builds, so the
+  // answer is per-thread. `null` means not yet known (the thread hasn't been
+  // resumed); stay optimistic there and let the engine be the authority.
+  const historyMode = state.threads[threadId]?.historyMode ?? null;
+  if (historyMode === "legacy") {
+    return null;
+  }
 
   async function handleRevert() {
     setBusy(true);

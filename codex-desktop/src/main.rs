@@ -14,6 +14,7 @@ mod commands;
 mod composer;
 mod config_settings;
 mod elicitation;
+mod history_mode;
 mod integrations;
 mod memories;
 mod projects;
@@ -202,6 +203,10 @@ fn main() {
             let project_store = projects::ProjectStore::load(app.handle())
                 .expect("failed to load Project list from app-local storage");
             app.manage(project_store);
+            // Session-scoped latch for the paginated-history negotiation, so a
+            // server that refuses pagination is asked once rather than on every
+            // `thread/start` (see `history_mode`).
+            app.manage(history_mode::HistoryModeSupport::default());
 
             // Block the (synchronous) setup hook on client startup so every
             // command handler can rely on `AppServerBridge` already being

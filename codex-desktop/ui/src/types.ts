@@ -124,8 +124,14 @@ export interface Turn {
   durationMs?: number | null;
 }
 
+/// The persisted history contract chosen when a thread was created
+/// (`Thread.historyMode`, experimental — this client sets `experimental_api`).
+/// `thread/revert` is rejected outright for anything but `paginated`, so the
+/// UI needs this to tell "you can't revert this thread" apart from a failure.
+export type ThreadHistoryMode = "legacy" | "paginated";
+
 export interface ThreadResumeResponse {
-  thread: { id: string; turns?: Turn[] };
+  thread: { id: string; turns?: Turn[]; historyMode?: ThreadHistoryMode };
 }
 
 // -- Thread list / search ---------------------------------------------------

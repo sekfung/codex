@@ -43,6 +43,7 @@ import type {
   SkillMetadata,
   ThreadGoal,
   ThreadGoalStatus,
+  ThreadHistoryMode,
   ThreadItem,
   ThreadSearchResult,
   ThreadSummary,
@@ -103,6 +104,12 @@ export interface ThreadState {
   /// so it is thread state rather than anything turn-scoped. `null` means the
   /// thread has none, which is distinct from one with an empty objective.
   goal: ThreadGoal | null;
+  /// The thread's persisted history contract, from `thread/resume`. `null`
+  /// until resumed. Revert requires `paginated`; threads created by an older
+  /// build of this client — or by any client that omits `historyMode` — are
+  /// `legacy` and can never be reverted, which is worth saying up front rather
+  /// than discovering by pressing the button.
+  historyMode: ThreadHistoryMode | null;
 }
 
 function emptyThread(): ThreadState {
@@ -120,6 +127,7 @@ function emptyThread(): ThreadState {
     queue: [],
     backgroundTerminals: [],
     goal: null,
+    historyMode: null,
     historyStatus: "idle",
     historyError: null,
   };
@@ -282,7 +290,12 @@ type Action =
   | { type: "APPROVAL_RESOLVED"; threadId: string; requestId: unknown }
   | { type: "HISTORY_LOADING"; threadId: string }
   | { type: "HISTORY_CLEARED"; threadId: string }
-  | { type: "HISTORY_LOADED"; threadId: string; turns: Turn[] }
+  | {
+      type: "HISTORY_LOADED";
+      threadId: string;
+      turns: Turn[];
+      historyMode: ThreadHistoryMode | null;
+    }
   | { type: "HISTORY_FAILED"; threadId: string; error: string }
   | { type: "APPROVAL_MODE_SET"; mode: ApprovalMode; overrides: boolean }
   | { type: "MODELS_LOADED"; models: Model[] }
@@ -666,6 +679,9 @@ function reducer(state: State, action: Action): State {
           itemTurnIds,
           turnStatus,
           itemOrder,
+          // Keep a previously-known mode if this response omitted it, rather
+          // than downgrading to "unknown" on a reload.
+          historyMode: action.historyMode ?? thread.historyMode,
           historyStatus: "loaded",
           historyError: null,
         };
@@ -1176,7 +1192,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     dispatch({ type: "HISTORY_LOADING", threadId });
     try {
       const response = await api.resumeThread(threadId);
-      dispatch({ type: "HISTORY_LOADED", threadId, turns: response.thread?.turns ?? [] });
+      dispatch({
+        type: "HISTORY_LOADED",
+        threadId,
+        turns: response.thread?.turns ?? [],
+        historyMode: response.thread?.historyMode ?? null,
+      });
     } catch (error) {
       // Surfaced in the main pane rather than swallowed — a silently blank
       // pane is exactly the failure this path exists to prevent.
@@ -1202,14 +1223,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       selection.model,
       selection.effort,
     )) as {
-      thread?: { id?: string };
+      thread?: { id?: string; historyMode?: ThreadHistoryMode };
     };
     const threadId = response.thread?.id;
     if (!threadId) return;
     dispatch({ type: "ACTIVE_THREAD_SET", threadId });
     // Brand new thread: there is no prior history to fetch, so mark it loaded
     // rather than letting `setActiveThread` resume an empty thread later.
-    dispatch({ type: "HISTORY_LOADED", threadId, turns: [] });
+    // `thread/start` reports the mode it actually settled on, which is what
+    // the paginated-history negotiation in `src/history_mode.rs` may have had
+    // to downgrade.
+    dispatch({
+      type: "HISTORY_LOADED",
+      threadId,
+      turns: [],
+      historyMode: response.thread?.historyMode ?? null,
+    });
     const path = activeProjectPathRef.current;
     if (path) {
       const list = await api.listThreads(path);
@@ -1283,7 +1312,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     dispatch({ type: "HISTORY_CLEARED", threadId });
     try {
       const response = await api.resumeThread(threadId);
-      dispatch({ type: "HISTORY_LOADED", threadId, turns: response.thread?.turns ?? [] });
+      dispatch({
+        type: "HISTORY_LOADED",
+        threadId,
+        turns: response.thread?.turns ?? [],
+        historyMode: response.thread?.historyMode ?? null,
+      });
     } catch (error) {
       dispatch({ type: "HISTORY_FAILED", threadId, error: String(error) });
     }
@@ -1431,7 +1465,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const forkedId = response.thread?.id;
     if (!forkedId) return;
     dispatch({ type: "ACTIVE_THREAD_SET", threadId: forkedId });
-    dispatch({ type: "HISTORY_LOADED", threadId: forkedId, turns: response.thread?.turns ?? [] });
+    dispatch({
+      type: "HISTORY_LOADED",
+      threadId: forkedId,
+      turns: response.thread?.turns ?? [],
+      historyMode: response.thread?.historyMode ?? null,
+    });
     const path = activeProjectPathRef.current;
     if (path) {
       const list = await api.listThreads(path);
@@ -2048,7 +2087,12 @@ function handleNotification(
     void api
       .resumeThread(threadId)
       .then((response) =>
-        dispatch({ type: "HISTORY_LOADED", threadId, turns: response.thread?.turns ?? [] }),
+        dispatch({
+          type: "HISTORY_LOADED",
+          threadId,
+          turns: response.thread?.turns ?? [],
+          historyMode: response.thread?.historyMode ?? null,
+        }),
       )
       .catch((error) =>
         dispatch({ type: "HISTORY_FAILED", threadId, error: String(error) }),

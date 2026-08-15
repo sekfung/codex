@@ -430,6 +430,13 @@ pub async fn submit_turn(
     mentions: Vec<ComposerMention>,
 ) -> CmdResult<TurnSubmission> {
     let input = build_turn_input(text, attachments, skills, file_refs, mentions);
+    // One id for this submission, carried down whichever branch it takes. The
+    // server echoes it back as `UserMessageItem.client_id`, so a client can tie
+    // the item it receives to the message it sent; minting a fresh id per
+    // branch would break that correlation exactly when the submission raced and
+    // correlation matters most. `queue/add` requires the field outright, and
+    // the TUI sets it on `turn/start` too.
+    let client_user_message_id = uuid::Uuid::now_v7().to_string();
 
     if let Some(turn_id) = active_turn_id {
         let mut steer_turn_id = turn_id;
@@ -442,7 +449,7 @@ pub async fn submit_turn(
                         thread_id: thread_id.clone(),
                         input: input.clone(),
                         expected_turn_id: steer_turn_id.clone(),
-                        client_user_message_id: None,
+                        client_user_message_id: Some(client_user_message_id.clone()),
                         responsesapi_client_metadata: None,
                         additional_context: None,
                     },
@@ -468,7 +475,7 @@ pub async fn submit_turn(
             if active_turn_not_steerable(error) {
                 // Not an error the user should see: the message is still
                 // wanted, just after this turn. Queue rather than drop it.
-                queue_turn_input(&bridge, &thread_id, input).await?;
+                queue_turn_input(&bridge, &thread_id, input, client_user_message_id).await?;
                 return Ok(TurnSubmission::Queued);
             }
 
@@ -495,6 +502,14 @@ pub async fn submit_turn(
             params: TurnStartParams {
                 thread_id,
                 input,
+                client_user_message_id: Some(client_user_message_id),
+                // The remaining fields are per-turn *overrides* on top of the
+                // thread's settings (`build_thread_settings_overrides` in
+                // `turn_processor.rs`). This client applies model, effort,
+                // approval mode and collaboration mode through
+                // `thread/settings/update` instead, so leaving them unset is
+                // what makes the turn honour those settings rather than
+                // pinning a snapshot of them per turn.
                 ..Default::default()
             },
         })
@@ -509,6 +524,7 @@ async fn queue_turn_input(
     bridge: &AppServerBridge,
     thread_id: &str,
     input: Vec<UserInput>,
+    client_user_message_id: String,
 ) -> CmdResult<()> {
     bridge
         .request(ClientRequest::ThreadQueueAdd {
@@ -516,8 +532,10 @@ async fn queue_turn_input(
             params: ThreadQueueAddParams {
                 thread_id: thread_id.to_string(),
                 input,
-                // Required by the API, same as `thread_ops::queue_add`.
-                client_user_message_id: uuid::Uuid::now_v7().to_string(),
+                // Required by the API (non-`Option` on the wire). Carried in
+                // from the caller so a submission that fell back to the queue
+                // keeps the id it would have had as a turn.
+                client_user_message_id,
             },
         })
         .await
