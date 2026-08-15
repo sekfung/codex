@@ -14,6 +14,8 @@ mod commands;
 mod composer;
 mod config_settings;
 mod elicitation;
+mod features;
+mod git_diff;
 mod history_mode;
 mod integrations;
 mod memories;
@@ -295,6 +297,9 @@ fn main() {
             commands::read_account_rate_limits,
             commands::list_models,
             commands::set_model,
+            commands::set_personality,
+            features::list_features,
+            git_diff::git_diff,
             commands::start_thread,
             commands::set_approval_mode,
             commands::thread_settings_indicators,

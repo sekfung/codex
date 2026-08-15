@@ -31,6 +31,7 @@ import type {
   ComposerSkill,
   FileSearchHit,
   ModelSelection,
+  Personality,
   ReasoningEffort,
   SkillMetadata,
   TurnSubmission,
@@ -42,6 +43,8 @@ import { GoalPanel } from "./GoalPanel";
 import { QueuePanel } from "./QueuePanel";
 import { FeedbackDialog } from "./FeedbackDialog";
 import { ReviewLauncher } from "./ReviewLauncher";
+import { DiffViewer } from "./DiffViewer";
+import { StatusPanel } from "./StatusPanel";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
@@ -97,6 +100,20 @@ function effortLabel(effort: ReasoningEffort | null): string {
   return EFFORT_LABELS[effort] ?? effort;
 }
 
+/// `/personality` — "choose a communication style for Codex".
+///
+/// The TUI offers exactly these two from a three-variant enum (`None` exists
+/// but is not in its picker), with these descriptions; mirrored rather than
+/// reworded so the two clients describe the same setting identically.
+const PERSONALITIES: Array<{ value: Personality; label: string; hint: string }> = [
+  { value: "friendly", label: "友好", hint: "热情、协作、乐于帮助。" },
+  { value: "pragmatic", label: "务实", hint: "简洁、聚焦任务、直接。" },
+];
+
+/// Stable key of the personality feature flag, as reported by
+/// `experimentalFeature/list` (its `FeatureSpec.key`).
+const PERSONALITY_FEATURE = "personality";
+
 
 /// Finds a sigil-prefixed token being typed at the caret, for a typeahead.
 ///
@@ -150,6 +167,7 @@ export function Composer({ threadId }: { threadId: string }) {
     submitMessage,
     setApprovalMode,
     setModelSelection,
+    setPersonality,
     setCollaborationMode,
     interruptActiveTurn,
   } = useStore();
@@ -185,6 +203,7 @@ export function Composer({ threadId }: { threadId: string }) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const [personalityMenuOpen, setPersonalityMenuOpen] = useState(false);
   const [sending, setSending] = useState(false);
   /// What the last submission actually did. Shown briefly because with a turn
   /// running the outcome is the engine's decision, not the user's — "steered"
@@ -210,6 +229,18 @@ export function Composer({ threadId }: { threadId: string }) {
   const activeModel = state.models.find((model) => model.model === selection.model);
   // Before `model/list` resolves there is nothing truthful to name.
   const modelLabel = activeModel?.displayName ?? selection.model ?? "默认模型";
+
+  // Two gates, both the TUI's: the `personality` feature flag, and the active
+  // model advertising `supportsPersonality`. A model that ignores the setting
+  // would make this control silently inert, which is the failure ADR-0021
+  // exists to prevent. An unknown flag (list still loading, or the lookup
+  // failed) is treated as enabled so a slow read cannot hide a working
+  // control — the model gate still applies.
+  const personalityFeature = state.features.find(
+    (feature) => feature.name === PERSONALITY_FEATURE,
+  );
+  const personalityAvailable =
+    personalityFeature?.enabled !== false && activeModel?.supportsPersonality === true;
 
   /// Skills actually still referenced in the text. Deleting a `$name` after
   /// picking it should drop the structured item too, or the engine would load
@@ -567,6 +598,16 @@ export function Composer({ threadId }: { threadId: string }) {
     }
   }
 
+  async function handlePersonalityChange(next: Personality) {
+    setPersonalityMenuOpen(false);
+    setModeError(null);
+    try {
+      await setPersonality(next);
+    } catch (err) {
+      setModeError(String(err));
+    }
+  }
+
   async function handleModeChange(next: ApprovalMode) {
     setModeMenuOpen(false);
     setModeError(null);
@@ -896,6 +937,8 @@ export function Composer({ threadId }: { threadId: string }) {
             )}
 
             <ReviewLauncher threadId={threadId} />
+            <DiffViewer threadId={threadId} />
+            <StatusPanel threadId={threadId} />
             <FeedbackDialog threadId={threadId} />
 
             <BackgroundTerminals threadId={threadId} />
@@ -949,6 +992,41 @@ export function Composer({ threadId }: { threadId: string }) {
             <div className="flex-1" />
 
             <ContextMeter threadId={threadId} />
+
+            {personalityAvailable && (
+              <Popover open={personalityMenuOpen} onOpenChange={setPersonalityMenuOpen}>
+                <PopoverTrigger asChild>
+                  <Button variant="ghost" size="xs" className="gap-1.5 text-muted-foreground">
+                    {PERSONALITIES.find((entry) => entry.value === state.personality)?.label ??
+                      "风格"}
+                    <ChevronDown className="size-3" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent align="end" className="w-72">
+                  <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                    Codex 的沟通风格
+                  </div>
+                  {PERSONALITIES.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className="flex w-full items-start gap-2.5 rounded-lg px-2 py-2 text-left hover:bg-accent"
+                      onClick={() => void handlePersonalityChange(option.value)}
+                    >
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-[13px] font-medium">{option.label}</span>
+                        <span className="block text-xs leading-5 text-muted-foreground">
+                          {option.hint}
+                        </span>
+                      </span>
+                      {option.value === state.personality && (
+                        <Check className="mt-0.5 size-4 shrink-0 text-foreground" />
+                      )}
+                    </button>
+                  ))}
+                </PopoverContent>
+              </Popover>
+            )}
 
             {state.models.length > 0 && (
               <Popover open={modelMenuOpen} onOpenChange={setModelMenuOpen}>

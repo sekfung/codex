@@ -25,8 +25,10 @@ import type {
   ConfigLayerMetadata,
   ConfigRequirements,
   ContextUsage,
+  FeatureFlag,
   McpServerRuntimeState,
   Model,
+  Personality,
   ModelSelection,
   Notice,
   PendingApproval,
@@ -219,6 +221,15 @@ interface State {
   /// per-app rather than per-thread because a new thread starts in
   /// `ModeKind::default()` anyway, which is Default.
   collaborationMode: string;
+  /// Communication style applied to the active thread (`/personality`).
+  /// Per-app for the same reason as `collaborationMode`: a new thread starts
+  /// at the server's configured default, and this only tracks explicit
+  /// overrides made from the composer.
+  personality: Personality | null;
+  /// Feature-flag enablement from `experimentalFeature/list`, loaded once at
+  /// startup. Empty until it resolves; consumers must treat "not found" as
+  /// "unknown", not "disabled", or a slow load would hide working controls.
+  features: FeatureFlag[];
   /// Live MCP startup state, keyed by server name. `mcpServerStatus/list`
   /// reports auth status but not startup state, so this can only be
   /// accumulated from `mcpServer/startupStatus/updated` — a server that
@@ -320,6 +331,8 @@ type Action =
   | { type: "MODELS_LOADED"; models: Model[] }
   | { type: "COLLABORATION_MODES_LOADED"; modes: CollaborationModePreset[] }
   | { type: "COLLABORATION_MODE_SET"; mode: string }
+  | { type: "FEATURES_LOADED"; features: FeatureFlag[] }
+  | { type: "PERSONALITY_SET"; personality: Personality }
   | { type: "MODEL_SELECTION_SET"; selection: ModelSelection; overrides: boolean }
   | {
       type: "CONFIG_LOADED";
@@ -761,6 +774,10 @@ function reducer(state: State, action: Action): State {
       return { ...state, collaborationModes: action.modes };
     case "COLLABORATION_MODE_SET":
       return { ...state, collaborationMode: action.mode };
+    case "FEATURES_LOADED":
+      return { ...state, features: action.features };
+    case "PERSONALITY_SET":
+      return { ...state, personality: action.personality };
     case "MODEL_SELECTION_SET":
       return {
         ...state,
@@ -858,6 +875,8 @@ const initialState: State = {
   modelSelectionOverridden: false,
   collaborationModes: [],
   collaborationMode: "default",
+  personality: null,
+  features: [],
   mcpRuntime: {},
   pendingLogin: null,
   skills: [],
@@ -944,6 +963,7 @@ interface StoreValue {
   setApprovalMode: (mode: ApprovalMode) => Promise<void>;
   setModelSelection: (selection: ModelSelection) => Promise<void>;
   setCollaborationMode: (mode: string) => Promise<void>;
+  setPersonality: (personality: Personality) => Promise<void>;
   interruptActiveTurn: (threadId: string) => Promise<void>;
   openSettings: (screen?: string) => void;
   closeSettings: () => void;
@@ -1000,6 +1020,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   modelSelectionRef.current = state.modelSelection;
   const collaborationModeRef = useRef<string>(initialState.collaborationMode);
   collaborationModeRef.current = state.collaborationMode;
+  const personalityRef = useRef<Personality | null>(initialState.personality);
+  personalityRef.current = state.personality;
   // Read at call time so cancelling targets the login that is actually in
   // flight, not one captured when the callback was created.
   const pendingLoginRef = useRef<PendingLogin | null>(null);
@@ -1039,6 +1061,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // `collaborationMode/list` is experimental. If it is unavailable the `@`
       // menu simply omits 计划模式 rather than offering a mode it cannot set.
       .catch((error) => tracingWarn(`collaborationMode/list failed: ${String(error)}`));
+  }, []);
+
+  useEffect(() => {
+    api
+      .listFeatures()
+      .then((features) => dispatch({ type: "FEATURES_LOADED", features }))
+      // Gating is advisory: on failure the list stays empty and consumers fall
+      // back to their own secondary checks, rather than hiding every gated
+      // control because one lookup failed.
+      .catch((error) => tracingWarn(`experimentalFeature/list failed: ${String(error)}`));
   }, []);
 
   /// Loads `config.toml` and seeds the session's approval mode / model from
@@ -1700,6 +1732,24 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  /// Applies a personality to the active thread (`/personality`).
+  ///
+  /// A per-thread override like the model picker, dispatched optimistically
+  /// and rolled back on rejection so the indicator cannot claim a style the
+  /// engine did not accept.
+  const setPersonality = useCallback(async (personality: Personality) => {
+    const threadId = activeThreadIdRef.current;
+    if (!threadId) return;
+    const previous = personalityRef.current;
+    dispatch({ type: "PERSONALITY_SET", personality });
+    try {
+      await api.setPersonality(threadId, personality);
+    } catch (error) {
+      if (previous) dispatch({ type: "PERSONALITY_SET", personality: previous });
+      throw error;
+    }
+  }, []);
+
   /// Settings side of the same setting: persists to `config.toml`, then
   /// reloads so the session value follows unless the composer overrode it.
   const setDefaultApprovalMode = useCallback(
@@ -1821,6 +1871,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setApprovalMode,
       setModelSelection,
       setCollaborationMode,
+      setPersonality,
       interruptActiveTurn,
       openSettings,
       closeSettings,
@@ -1868,6 +1919,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setApprovalMode,
       setModelSelection,
       setCollaborationMode,
+      setPersonality,
       interruptActiveTurn,
       openSettings,
       closeSettings,

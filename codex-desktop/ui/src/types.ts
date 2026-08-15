@@ -259,6 +259,35 @@ export interface Model {
   supportedReasoningEfforts: ReasoningEffortOption[];
   defaultReasoningEffort: ReasoningEffort;
   modelSpecialty?: string | null;
+  /// Whether this model honours a personality. The TUI refuses to open its
+  /// personality picker when false, since the setting would be inert.
+  supportsPersonality?: boolean;
+}
+
+/// Communication style (`/personality`). Lowercase on the wire —
+/// `Personality` is `rename_all = "lowercase"` while its camelCase siblings
+/// are not, so the values are spelled out rather than derived.
+export type Personality = "none" | "friendly" | "pragmatic";
+
+/// One feature flag from `experimentalFeature/list`. The engine returns the
+/// whole feature table, not just experimental entries, which is what makes it
+/// usable for gating a stable flag like `personality`.
+export interface FeatureFlag {
+  name: string;
+  enabled: boolean;
+  defaultEnabled: boolean;
+  stage: "beta" | "underDevelopment" | "stable" | "deprecated" | "removed";
+  /// Non-null only for beta-stage features — the engine's own signal for
+  /// "this belongs in a user-facing experimental-features list".
+  displayName?: string | null;
+  description?: string | null;
+}
+
+/// Result of `/diff`. `isGitRepo: false` is distinct from an empty diff: one
+/// means "not a repository", the other "no changes".
+export interface GitDiffResult {
+  isGitRepo: boolean;
+  diff: string;
 }
 
 export interface ModelListResponse {

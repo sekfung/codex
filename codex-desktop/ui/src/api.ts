@@ -13,8 +13,10 @@ import type {
   ConfigReadResponse,
   ConfigRequirementsReadResponse,
   ContextUsage,
+  FeatureFlag,
   FileSearchHit,
   GetAccountRateLimitsResponse,
+  GitDiffResult,
   GetAccountResponse,
   GetAccountTokenUsageResponse,
   HooksListResponse,
@@ -24,6 +26,7 @@ import type {
   McpServerOauthLoginResponse,
   MemorySettings,
   ModelListResponse,
+  Personality,
   PluginListResponse,
   AppsListResponse,
   DetectedMigrationSource,
@@ -142,6 +145,18 @@ export const setModel = (
   model: string | null,
   effort: ReasoningEffort | null,
 ) => invoke<unknown>("set_model", { threadId, model, effort });
+
+/// `/personality` — a per-thread override, like the model above.
+export const setPersonality = (threadId: string, personality: Personality) =>
+  invoke<unknown>("set_personality", { threadId, personality });
+
+/// Feature-flag enablement from `experimentalFeature/list`. Gates controls the
+/// deployment may have turned off, rather than assuming they are available.
+export const listFeatures = () => invoke<FeatureFlag[]>("list_features");
+
+/// `/diff` — the working-tree diff, run through `command/exec` so it obeys the
+/// session's sandbox policy (never spawned locally; ADR-0021).
+export const gitDiff = (cwd: string) => invoke<GitDiffResult>("git_diff", { cwd });
 
 // -- Settings / config.toml (ADR-0020) ---------------------------------------
 // Behavior settings live in `config.toml` so the CLI honors them too; desktop

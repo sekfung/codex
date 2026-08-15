@@ -32,6 +32,7 @@ use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadUnarchiveParams;
 use codex_app_server_protocol::TurnInterruptParams;
+use codex_protocol::config_types::Personality;
 use codex_protocol::openai_models::ReasoningEffort;
 use serde_json::Value as JsonValue;
 use tauri::State;
@@ -377,6 +378,37 @@ pub async fn set_model(
                 thread_id,
                 model,
                 effort,
+                ..Default::default()
+            },
+        })
+        .await
+}
+
+/// Applies a personality to an already-running thread — the TUI's
+/// `/personality`, "choose a communication style for Codex".
+///
+/// Same shape as `set_model`: a per-thread override through
+/// `thread/settings/update`, whose own doc calls this field an "override for
+/// subsequent turns". It is deliberately not set in `thread_start_params`,
+/// where personality is one of the config-derived overrides the server fills
+/// from the user's own `config.toml`.
+///
+/// The picker offering this is gated twice, matching the TUI: on the
+/// `personality` feature flag (`crate::features`) and on the active model's
+/// `supportsPersonality`, since a model that ignores the setting would make
+/// the control a no-op.
+#[tauri::command]
+pub async fn set_personality(
+    bridge: State<'_, AppServerBridge>,
+    thread_id: String,
+    personality: Personality,
+) -> CmdResult<JsonValue> {
+    bridge
+        .request(ClientRequest::ThreadSettingsUpdate {
+            request_id: bridge.next_request_id(),
+            params: ThreadSettingsUpdateParams {
+                thread_id,
+                personality: Some(personality),
                 ..Default::default()
             },
         })

@@ -29,6 +29,9 @@ codex-core = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-utils-approval-presets = { workspace = true }
 codex-feedback = { workspace = true }
+# Owns the fsmonitor probe policy shared with the TUI's `/diff`; command
+# execution stays per-surface (see `src/git_diff.rs`).
+codex-git-utils = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-home-dir = { workspace = true }
