@@ -22,6 +22,8 @@ use std::path::PathBuf;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CommandExecParams;
 use codex_app_server_protocol::CommandExecResponse;
+use codex_app_server_protocol::GitDiffToRemoteParams;
+use codex_app_server_protocol::GitDiffToRemoteResponse;
 use codex_git_utils::FsmonitorOverride;
 use codex_git_utils::FsmonitorProbeRunner;
 use codex_git_utils::detect_fsmonitor_override;
@@ -374,6 +376,233 @@ pub async fn git_diff(
     Ok(GitDiffResult {
         is_git_repo: true,
         diff: format!("{tracked}{untracked}"),
+    })
+}
+
+/// Why a remote comparison is unavailable, when it is.
+///
+/// The RPC collapses every failure into one `invalid_request` string, because
+/// `git_diff_to_remote` returns `Option` and the processor turns `None` into
+/// "failed to compute git diff to remote". `None` is returned for a missing
+/// repository, *no configured remote*, an unresolvable merge base, and a failed
+/// diff alike — and "this repository has no remote" is an ordinary state, not a
+/// fault. Distinguishing it is the difference between an answer and a red error
+/// box on every local-only repository.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum RemoteDiffUnavailable {
+    /// `cwd` is not inside a git work tree.
+    NotAGitRepo,
+    /// A repository, but no remote is configured — nothing to compare against.
+    NoRemote,
+}
+
+/// Result of `gitDiffToRemote`.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteDiffResult {
+    /// Set when no comparison is possible; `sha`/`diff` are then empty.
+    pub unavailable: Option<RemoteDiffUnavailable>,
+    /// The commit compared against — the closest ancestor that exists on a
+    /// remote, not necessarily the upstream branch tip.
+    pub sha: String,
+    /// May be empty, which means everything local is already on a remote.
+    pub diff: String,
+}
+
+/// `gitDiffToRemote` — everything in the working tree that is not yet on a
+/// remote, including commits made locally but never pushed.
+///
+/// Distinct from [`git_diff`], which only shows uncommitted work. This one
+/// answers "what have I not pushed", and unlike the working-tree diff it is a
+/// plain RPC: the engine owns the whole computation (`git-utils/src/info.rs`
+/// walks the branch ancestry to find the closest shared commit), so there is no
+/// command to construct here.
+#[tauri::command]
+pub async fn git_diff_to_remote(
+    bridge: State<'_, AppServerBridge>,
+    cwd: String,
+) -> Result<RemoteDiffResult, String> {
+    let cwd = PathBuf::from(cwd);
+
+    // Probed before the RPC purely so the two ordinary "nothing to show" states
+    // can be named. Both are `codex_git_utils` reads, reused rather than
+    // reimplemented, in the same spirit as `git_refs.rs`.
+    if codex_git_utils::get_git_repo_root(&cwd).is_none() {
+        return Ok(RemoteDiffResult {
+            unavailable: Some(RemoteDiffUnavailable::NotAGitRepo),
+            sha: String::new(),
+            diff: String::new(),
+        });
+    }
+    if codex_git_utils::get_git_remote_urls_assume_git_repo(&cwd)
+        .await
+        .is_none_or(|remotes| remotes.is_empty())
+    {
+        return Ok(RemoteDiffResult {
+            unavailable: Some(RemoteDiffUnavailable::NoRemote),
+            sha: String::new(),
+            diff: String::new(),
+        });
+    }
+
+    let response: GitDiffToRemoteResponse = bridge
+        .request_as(ClientRequest::GitDiffToRemote {
+            request_id: bridge.next_request_id(),
+            params: GitDiffToRemoteParams { cwd },
+        })
+        .await?;
+
+    Ok(RemoteDiffResult {
+        unavailable: None,
+        // `GitSha` is a newtype over `String` and serializes transparently
+        // (ts-rs emits `export type GitSha = string`), but the inner value is
+        // taken here rather than passing the wrapper along, so the frontend
+        // type cannot drift from the wire shape.
+        sha: response.sha.0,
+        diff: response.diff,
+    })
+}
+
+/// Lines added and removed on this branch since it left the default branch.
+///
+/// Committed work only — `merge_base..HEAD` does not see the working tree.
+/// That is the same range the TUI's `branch-changes` status item reports, and
+/// the uncommitted side is what the 工作区 diff already answers.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BranchChangeStats {
+    pub additions: u64,
+    pub deletions: u64,
+}
+
+/// Sums a `git diff --numstat` body.
+///
+/// Binary files are reported as `-\t-\t<path>` and parse to zero on both
+/// columns, which is intended: they contribute no line counts.
+fn sum_numstat(stdout: &str) -> BranchChangeStats {
+    let mut stats = BranchChangeStats::default();
+    for line in stdout.lines() {
+        let mut columns = line.split('\t');
+        stats.additions += columns
+            .next()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(0);
+        stats.deletions += columns
+            .next()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(0);
+    }
+    stats
+}
+
+/// The branch this thread's repository is on, and how far it has moved.
+///
+/// Ported from `tui/src/branch_summary.rs`, which backs the TUI status line's
+/// `git-branch` and `branch-changes` items — the named basis for showing this
+/// at all. The command sequence (default branch → `merge-base` → `--numstat`)
+/// is kept identical, and every invocation goes through `command/exec` for the
+/// reason given in this module's header: these are constructed commands.
+///
+/// `pull-request-number`, the third item there, is deliberately not ported: it
+/// shells out to `gh` and depends on an authenticated GitHub CLI, which is a
+/// dependency this client does not otherwise have.
+///
+/// Every field is optional because every probe is best-effort. A detached HEAD
+/// has no branch, a repository with no default branch has no comparison, and
+/// neither is worth an error — the panel simply omits the row.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BranchStatus {
+    pub is_git_repo: bool,
+    pub branch: Option<String>,
+    pub default_branch: Option<String>,
+    pub changes: Option<BranchChangeStats>,
+}
+
+#[tauri::command]
+pub async fn branch_status(
+    bridge: State<'_, AppServerBridge>,
+    cwd: String,
+) -> Result<BranchStatus, String> {
+    let cwd = PathBuf::from(cwd);
+    let bridge = bridge.inner();
+
+    if !inside_git_repo(bridge, &cwd).await? {
+        return Ok(BranchStatus::default());
+    }
+
+    let branch = codex_git_utils::current_branch_name(&cwd).await;
+    let Some(default_branch) = codex_git_utils::default_branch_name(&cwd).await else {
+        return Ok(BranchStatus {
+            is_git_repo: true,
+            branch,
+            default_branch: None,
+            changes: None,
+        });
+    };
+
+    let mut probe_runner = BridgeProbeRunner { bridge, cwd: &cwd };
+    let fsmonitor = detect_fsmonitor_override(&mut probe_runner).await;
+
+    // `--numstat` still diffs content, so it can invoke a repository's filter
+    // drivers exactly as the working-tree diff can. The same suppression is
+    // applied rather than assumed unnecessary.
+    let filter_output = exec(
+        bridge,
+        git_argv(
+            fsmonitor,
+            &[
+                "config",
+                "--null",
+                "--name-only",
+                "--get-regexp",
+                EXECUTABLE_FILTER_CONFIG_PATTERN,
+            ],
+        ),
+        &cwd,
+        HashMap::new(),
+    )
+    .await?;
+    if filter_output.exit_code != 0 && filter_output.exit_code != 1 {
+        return Err(format!(
+            "git config --get-regexp failed with status {}",
+            filter_output.exit_code
+        ));
+    }
+    let config_overrides = filter_config_overrides_from_stdout(&filter_output.stdout);
+
+    // A missing merge base is ordinary (an unborn HEAD, an unrelated history),
+    // so the stats are dropped rather than failing the whole panel.
+    let changes = match capture_stdout(
+        bridge,
+        &cwd,
+        fsmonitor,
+        &["merge-base", "HEAD", &default_branch],
+    )
+    .await
+    {
+        Ok(stdout) if !stdout.trim().is_empty() => {
+            let range = format!("{}..HEAD", stdout.trim());
+            capture_diff(
+                bridge,
+                &cwd,
+                fsmonitor,
+                &config_overrides,
+                &["diff", "--numstat", &range],
+            )
+            .await
+            .ok()
+            .map(|numstat| sum_numstat(&numstat))
+        }
+        _ => None,
+    };
+
+    Ok(BranchStatus {
+        is_git_repo: true,
+        branch,
+        default_branch: Some(default_branch),
+        changes,
     })
 }
 

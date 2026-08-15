@@ -41,10 +41,12 @@ interface NavItem {
   id: string;
   label: string;
   Icon: typeof User;
-  /// Entries with no screen yet render disabled rather than as dead links.
-  /// These are still v1 scope per ADR-0006 — they're the next increment, not
-  /// abandoned. Anything ADR-0006 *excludes* (computer control, browser,
-  /// voice, cloud tasks, remote control) is absent entirely.
+  /**
+   * Entries with no screen yet render disabled rather than as dead links.
+   * These are still v1 scope per ADR-0006 — they're the next increment, not
+   * abandoned. Anything ADR-0006 *excludes* (computer control, browser,
+   * voice, cloud tasks, remote control) is absent entirely.
+   */
   ready?: boolean;
 }
 

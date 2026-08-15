@@ -4,13 +4,15 @@ import { useStore } from "../store";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-/// Server-pushed notices: `warning`, `error`, `guardianWarning`,
-/// `configWarning`, `deprecationNotice`, `model/rerouted`.
-///
-/// Every one of these was previously discarded by the store, so a malformed
-/// config or a silently substituted model produced no visible sign whatsoever.
-/// They sit above the composer rather than in the message stream because they
-/// are not part of the conversation — several arrive with no thread at all.
+/**
+ * Server-pushed notices: `warning`, `error`, `guardianWarning`,
+ * `configWarning`, `deprecationNotice`, `model/rerouted`.
+ *
+ * Every one of these was previously discarded by the store, so a malformed
+ * config or a silently substituted model produced no visible sign whatsoever.
+ * They sit above the composer rather than in the message stream because they
+ * are not part of the conversation — several arrive with no thread at all.
+ */
 export function NoticeBar() {
   const { state, dispatch } = useStore();
   if (state.notices.length === 0) return null;

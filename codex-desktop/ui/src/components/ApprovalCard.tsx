@@ -64,13 +64,15 @@ export function ApprovalCard({ approval }: { approval: PendingApproval }) {
   return <PermissionsApproval approval={approval} {...shared} />;
 }
 
-/// `mcpServer/elicitation/request`: an MCP server asking the user to fill in a
-/// form, confirm, or visit a URL.
-///
-/// The schema arrives as a deeply nested untagged union; `elicitation_view`
-/// flattens it in Rust so this component only ever sees a list of controls.
-/// Answers go back the same way — Rust types each one from its declared
-/// control, because a number field must send `3` and not `"3"`.
+/**
+ * `mcpServer/elicitation/request`: an MCP server asking the user to fill in a
+ * form, confirm, or visit a URL.
+ *
+ * The schema arrives as a deeply nested untagged union; `elicitation_view`
+ * flattens it in Rust so this component only ever sees a list of controls.
+ * Answers go back the same way — Rust types each one from its declared
+ * control, because a number field must send `3` and not `"3"`.
+ */
 function ElicitationCard({
   request,
   busy,
@@ -300,8 +302,10 @@ interface DecisionProps {
   resolve: (run: () => Promise<void>) => Promise<void>;
 }
 
-/// Distinguished from ordinary messages by a subtle accent-tinted frame —
-/// noticeable without being alarming, since most approvals are routine.
+/**
+ * Distinguished from ordinary messages by a subtle accent-tinted frame —
+ * noticeable without being alarming, since most approvals are routine.
+ */
 function CardShell({
   Icon,
   title,
@@ -593,8 +597,10 @@ function PermissionsApproval({
   );
 }
 
-/// Renders what a permission profile actually asks for, so "Grant" is an
-/// informed decision rather than a blind one.
+/**
+ * Renders what a permission profile actually asks for, so "Grant" is an
+ * informed decision rather than a blind one.
+ */
 function PermissionProfileSummary({ profile }: { profile: PermissionProfile }) {
   const lines: string[] = [];
 
@@ -647,13 +653,15 @@ function formatNetworkAmendment(amendment: NetworkPolicyAmendment): string {
     : `始终禁止访问 ${amendment.host}`;
 }
 
-/// `item/tool/requestUserInput` — a tool asking the user a question.
-///
-/// Rendered inline like the approval cards because it is the same class of
-/// thing: the turn waits on this client. Answers are collected per question
-/// and encoded in Rust (`src/user_input.rs`), which owns the two conventions
-/// that are easy to get silently wrong — a chosen option answers with its
-/// label, and free text carries a `user_note:` prefix.
+/**
+ * `item/tool/requestUserInput` — a tool asking the user a question.
+ *
+ * Rendered inline like the approval cards because it is the same class of
+ * thing: the turn waits on this client. Answers are collected per question
+ * and encoded in Rust (`src/user_input.rs`), which owns the two conventions
+ * that are easy to get silently wrong — a chosen option answers with its
+ * label, and free text carries a `user_note:` prefix.
+ */
 function UserInputRequestCard({
   request,
   busy,

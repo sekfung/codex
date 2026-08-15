@@ -74,10 +74,12 @@ export function AppearanceSettings() {
   );
 }
 
-/// A miniature of the app's own two-pane layout. Painted with literal light
-/// and dark values rather than theme tokens, because each card must show what
-/// that theme looks like regardless of the theme currently in force — the
-/// "系统" card deliberately shows both halves at once.
+/**
+ * A miniature of the app's own two-pane layout. Painted with literal light
+ * and dark values rather than theme tokens, because each card must show what
+ * that theme looks like regardless of the theme currently in force — the
+ * "系统" card deliberately shows both halves at once.
+ */
 function ThemePreview({ mode }: { mode: ThemeMode }) {
   if (mode === "system") {
     return (

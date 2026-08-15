@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { Loader2 } from "lucide-react";
 
 import * as api from "../../api";
 import { useStore } from "../../store";
+import { useAsyncAction } from "./useAsyncAction";
 import type { FeatureFlag } from "../../types";
 import { SettingRow, SettingsHeader, SettingsSection } from "./SettingsPrimitives";
 import { Switch } from "@/components/ui/switch";
@@ -35,8 +36,7 @@ import { Switch } from "@/components/ui/switch";
 
 export function ExperimentalSettings() {
   const { state, refetchFeatures } = useStore();
-  const [busyName, setBusyName] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { isBusy, error, run } = useAsyncAction();
 
   // Loaded once at startup for gating; refresh on open so a change made from
   // the CLI sharing this `$CODEX_HOME` (ADR-0008) is reflected.
@@ -47,19 +47,16 @@ export function ExperimentalSettings() {
   const beta = state.features.filter((feature) => feature.stage === "beta");
 
   async function toggle(feature: FeatureFlag, enabled: boolean) {
-    setBusyName(feature.name);
-    setError(null);
-    try {
-      await api.setFeatureEnabled(feature.name, enabled);
-      // Re-read rather than patching locally: a managed or project config
-      // layer can pin a flag, so the effective value is the server's to
-      // report. The same reasoning as the skills screen.
-      refetchFeatures();
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setBusyName(null);
-    }
+    await run(
+      async () => {
+        await api.setFeatureEnabled(feature.name, enabled);
+        // Re-read rather than patching locally: a managed or project config
+        // layer can pin a flag, so the effective value is the server's to
+        // report. The same reasoning as the skills screen.
+        refetchFeatures();
+      },
+      { key: feature.name },
+    );
   }
 
   return (
@@ -88,7 +85,7 @@ export function ExperimentalSettings() {
                 </span>
               }
               control={
-                busyName === feature.name ? (
+                isBusy(feature.name) ? (
                   <Loader2 className="size-4 animate-spin text-muted-foreground" />
                 ) : (
                   <Switch

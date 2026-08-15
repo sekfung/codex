@@ -32,8 +32,10 @@ function applyResolvedTheme(resolved: "light" | "dark") {
 interface ThemeValue {
   mode: ThemeMode;
   setMode: (mode: ThemeMode) => void;
-  /// What `mode` currently resolves to — `system` is not a paintable value,
-  /// and the Appearance previews need to know which card is actually active.
+  /**
+   * What `mode` currently resolves to — `system` is not a paintable value,
+   * and the Appearance previews need to know which card is actually active.
+   */
   resolved: "light" | "dark";
 }
 

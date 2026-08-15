@@ -3,14 +3,16 @@ import { CircleAlert } from "lucide-react";
 import { useStore } from "../store";
 import { formatResetTime, usageExhausted } from "./AccountFooter";
 
-/// Informational-only quota notice above the composer.
-///
-/// The Official App's equivalent banner carries "升级至 Pro" / "增加额度"
-/// buttons; those are deliberately absent here — this app has no billing,
-/// upgrade or top-up surface at all, so the notice states the situation and
-/// stops. It appears only when the *backend* reports the limit as reached
-/// (`rateLimitReachedType` / `spendControlReached`), never from a usage
-/// percentage threshold invented client-side.
+/**
+ * Informational-only quota notice above the composer.
+ *
+ * The Official App's equivalent banner carries "升级至 Pro" / "增加额度"
+ * buttons; those are deliberately absent here — this app has no billing,
+ * upgrade or top-up surface at all, so the notice states the situation and
+ * stops. It appears only when the *backend* reports the limit as reached
+ * (`rateLimitReachedType` / `spendControlReached`), never from a usage
+ * percentage threshold invented client-side.
+ */
 export function UsageNotice() {
   const { state } = useStore();
   const { rateLimits } = state;

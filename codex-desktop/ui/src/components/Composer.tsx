@@ -80,10 +80,12 @@ const APPROVAL_MODES: Array<{
   },
 ];
 
-/// Effort labels the Official App shows next to the model ("轻度" in the
-/// reference screenshot). The protocol's `ReasoningEffort` is an open string
-/// (it has a `Custom(String)` variant), so unknown values fall back to the raw
-/// value rather than being dropped.
+/**
+ * Effort labels the Official App shows next to the model ("轻度" in the
+ * reference screenshot). The protocol's `ReasoningEffort` is an open string
+ * (it has a `Custom(String)` variant), so unknown values fall back to the raw
+ * value rather than being dropped.
+ */
 const EFFORT_LABELS: Record<string, string> = {
   none: "无推理",
   minimal: "极简",
@@ -100,27 +102,33 @@ function effortLabel(effort: ReasoningEffort | null): string {
   return EFFORT_LABELS[effort] ?? effort;
 }
 
-/// `/personality` — "choose a communication style for Codex".
-///
-/// The TUI offers exactly these two from a three-variant enum (`None` exists
-/// but is not in its picker), with these descriptions; mirrored rather than
-/// reworded so the two clients describe the same setting identically.
+/**
+ * `/personality` — "choose a communication style for Codex".
+ *
+ * The TUI offers exactly these two from a three-variant enum (`None` exists
+ * but is not in its picker), with these descriptions; mirrored rather than
+ * reworded so the two clients describe the same setting identically.
+ */
 const PERSONALITIES: Array<{ value: Personality; label: string; hint: string }> = [
   { value: "friendly", label: "友好", hint: "热情、协作、乐于帮助。" },
   { value: "pragmatic", label: "务实", hint: "简洁、聚焦任务、直接。" },
 ];
 
-/// Stable key of the personality feature flag, as reported by
-/// `experimentalFeature/list` (its `FeatureSpec.key`).
+/**
+ * Stable key of the personality feature flag, as reported by
+ * `experimentalFeature/list` (its `FeatureSpec.key`).
+ */
 const PERSONALITY_FEATURE = "personality";
 
 
-/// Finds a sigil-prefixed token being typed at the caret, for a typeahead.
-///
-/// Both sigils are the engine's own, not conventions invented here: `$` is
-/// `TOOL_MENTION_SIGIL` and `@` is `PLUGIN_TEXT_MENTION_SIGIL`
-/// (`utils/plugins/src/mention_syntax.rs`), and the TUI composer completes
-/// files on `@` (`chat_composer.rs::insert_selected_path`).
+/**
+ * Finds a sigil-prefixed token being typed at the caret, for a typeahead.
+ *
+ * Both sigils are the engine's own, not conventions invented here: `$` is
+ * `TOOL_MENTION_SIGIL` and `@` is `PLUGIN_TEXT_MENTION_SIGIL`
+ * (`utils/plugins/src/mention_syntax.rs`), and the TUI composer completes
+ * files on `@` (`chat_composer.rs::insert_selected_path`).
+ */
 function activeMentionQuery(
   text: string,
   caret: number,
@@ -137,8 +145,10 @@ function activeMentionQuery(
   return { start, query };
 }
 
-/// One 添加-section row in the `@` menu: icon, name, one-line description —
-/// the shape the Official App uses for these entries.
+/**
+ * One 添加-section row in the `@` menu: icon, name, one-line description —
+ * the shape the Official App uses for these entries.
+ */
 function MentionRow({
   Icon,
   title,
@@ -174,40 +184,54 @@ export function Composer({ threadId }: { threadId: string }) {
   const [goalEditorOpen, setGoalEditorOpen] = useState(false);
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
-  /// Skills the user picked from the typeahead this message. The `$name` token
-  /// also stays in `text` — the engine wants both (see `src/composer.rs`).
+  /**
+   * Skills the user picked from the typeahead this message. The `$name` token
+   * also stays in `text` — the engine wants both (see `src/composer.rs`).
+   */
   const [pickedSkills, setPickedSkills] = useState<ComposerSkill[]>([]);
   const [skillQuery, setSkillQuery] = useState<{ start: number; query: string } | null>(null);
   const [skillHighlight, setSkillHighlight] = useState(0);
-  /// Paths added from the `@` menu's 文件 / 文件夹 entries. Shown as chips
-  /// beside the image attachments; Rust folds their paths into the text on
-  /// send, because a file reference has no structured `UserInput` variant.
+  /**
+   * Paths added from the `@` menu's 文件 / 文件夹 entries. Shown as chips
+   * beside the image attachments; Rust folds their paths into the text on
+   * send, because a file reference has no structured `UserInput` variant.
+   */
   const [fileRefs, setFileRefs] = useState<ComposerFileRef[]>([]);
-  /// Apps/plugins picked from the `@` menu's 插件 section. Like skills, the
-  /// `@token` also stays in the text and the structured item rides alongside.
+  /**
+   * Apps/plugins picked from the `@` menu's 插件 section. Like skills, the
+   * `@token` also stays in the text and the structured item rides alongside.
+   */
   const [pickedMentions, setPickedMentions] = useState<ComposerMention[]>([]);
-  /// The token Rust derived for each pick, so the "still referenced in the
-  /// text" check below compares against the real token rather than
-  /// re-deriving it here.
+  /**
+   * The token Rust derived for each pick, so the "still referenced in the
+   * text" check below compares against the real token rather than
+   * re-deriving it here.
+   */
   const mentionTokens = useRef(new Map<string, string>());
-  /// `@` file completions. Unlike skills there is no companion structured
-  /// item — a picked file becomes plain path text, which is the engine's own
-  /// model (see `file_mentions_are_text_only` in `src/composer.rs`).
+  /**
+   * `@` file completions. Unlike skills there is no companion structured
+   * item — a picked file becomes plain path text, which is the engine's own
+   * model (see `file_mentions_are_text_only` in `src/composer.rs`).
+   */
   const [fileQuery, setFileQuery] = useState<{ start: number; query: string } | null>(null);
   const [fileMatches, setFileMatches] = useState<FileSearchHit[]>([]);
   const [fileHighlight, setFileHighlight] = useState(0);
-  /// One stable token for this composer's whole lifetime: `fuzzyFileSearch`
-  /// cancels the previous request that used the same value, so reusing it is
-  /// what makes a fast typist's earlier search yield to the later one.
+  /**
+   * One stable token for this composer's whole lifetime: `fuzzyFileSearch`
+   * cancels the previous request that used the same value, so reusing it is
+   * what makes a fast typist's earlier search yield to the later one.
+   */
   const fileSearchToken = useRef(`codex-desktop-file-search-${Math.random().toString(36).slice(2)}`);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [personalityMenuOpen, setPersonalityMenuOpen] = useState(false);
   const [sending, setSending] = useState(false);
-  /// What the last submission actually did. Shown briefly because with a turn
-  /// running the outcome is the engine's decision, not the user's — "steered"
-  /// and "queued" look identical from the composer otherwise.
+  /**
+   * What the last submission actually did. Shown briefly because with a turn
+   * running the outcome is the engine's decision, not the user's — "steered"
+   * and "queued" look identical from the composer otherwise.
+   */
   const [lastSubmission, setLastSubmission] = useState<TurnSubmission["outcome"] | null>(null);
   const [interrupting, setInterrupting] = useState(false);
   const [modeError, setModeError] = useState<string | null>(null);
@@ -242,17 +266,21 @@ export function Composer({ threadId }: { threadId: string }) {
   const personalityAvailable =
     personalityFeature?.enabled !== false && activeModel?.supportsPersonality === true;
 
-  /// Skills actually still referenced in the text. Deleting a `$name` after
-  /// picking it should drop the structured item too, or the engine would load
-  /// a skill the message no longer mentions.
+  /**
+   * Skills actually still referenced in the text. Deleting a `$name` after
+   * picking it should drop the structured item too, or the engine would load
+   * a skill the message no longer mentions.
+   */
   const activeSkills = useMemo(
     () => pickedSkills.filter((skill) => text.includes(`$${skill.name}`)),
     [pickedSkills, text],
   );
 
-  /// Mentions still referenced in the text. Deleting the `@token` after
-  /// picking it drops the structured item too — the same rule `activeSkills`
-  /// applies, so the engine never resolves a mention the message dropped.
+  /**
+   * Mentions still referenced in the text. Deleting the `@token` after
+   * picking it drops the structured item too — the same rule `activeSkills`
+   * applies, so the engine never resolves a mention the message dropped.
+   */
   const activeMentions = useMemo(
     () =>
       pickedMentions.filter((mention) => {
@@ -272,17 +300,21 @@ export function Composer({ threadId }: { threadId: string }) {
       .slice(0, 8);
   }, [skillQuery, state.skills]);
 
-  /// Roots to search: the open Projects, matching how skills are scanned
-  /// per-cwd. `fuzzyFileSearch` takes `roots` explicitly and searches nothing
-  /// when given none.
+  /**
+   * Roots to search: the open Projects, matching how skills are scanned
+   * per-cwd. `fuzzyFileSearch` takes `roots` explicitly and searches nothing
+   * when given none.
+   */
   const searchRoots = useMemo(
     () => state.projects.map((project) => project.path),
     [state.projects],
   );
 
-  /// Debounced `fuzzyFileSearch`. `ignore` guards against a late response
-  /// landing after the query moved on; the shared cancellation token means the
-  /// server is already dropping the superseded search rather than computing it.
+  /**
+   * Debounced `fuzzyFileSearch`. `ignore` guards against a late response
+   * landing after the query moved on; the shared cancellation token means the
+   * server is already dropping the superseded search rather than computing it.
+   */
   useEffect(() => {
     if (!fileQuery || searchRoots.length === 0) {
       setFileMatches([]);
@@ -316,22 +348,24 @@ export function Composer({ threadId }: { threadId: string }) {
     setFileQuery(activeMentionQuery(value, caret, "@"));
   }
 
-  /// Replaces the `@que` token with the bare path, dropping the `@`.
-  ///
-  /// This mirrors the TUI's `insert_selected_path`, which likewise inserts the
-  /// path alone and records no structured item — files ride in the message
-  /// text, unlike skills.
-  /// Entries in the `@` menu.
-  ///
-  /// The Official App's `@` opens a unified insertion menu, not a file picker:
-  /// an 添加 section (files and folders, 目标, 计划模式) sits above the file
-  /// results. Only the 目标 entry is implemented here — 计划模式 and the
-  /// 插件 / ChatGPT 对话 sections are separate capabilities, and one of them
-  /// (cross-conversation references) has no basis in this engine at all.
-  ///
-  /// Goal and file results share one flat list so arrow keys move through the
-  /// menu as a whole rather than through two lists that each think they own
-  /// the caret.
+  /**
+   * Replaces the `@que` token with the bare path, dropping the `@`.
+   *
+   * This mirrors the TUI's `insert_selected_path`, which likewise inserts the
+   * path alone and records no structured item — files ride in the message
+   * text, unlike skills.
+   * Entries in the `@` menu.
+   *
+   * The Official App's `@` opens a unified insertion menu, not a file picker:
+   * an 添加 section (files and folders, 目标, 计划模式) sits above the file
+   * results. Only the 目标 entry is implemented here — 计划模式 and the
+   * 插件 / ChatGPT 对话 sections are separate capabilities, and one of them
+   * (cross-conversation references) has no basis in this engine at all.
+   *
+   * Goal and file results share one flat list so arrow keys move through the
+   * menu as a whole rather than through two lists that each think they own
+   * the caret.
+   */
   type MentionEntry =
     | { kind: "pickFiles" }
     | { kind: "pickFolders" }
@@ -340,13 +374,15 @@ export function Composer({ threadId }: { threadId: string }) {
     | { kind: "app"; app: AppInfo }
     | { kind: "file"; hit: FileSearchHit };
 
-  /// The 插件 section: connectors from `app/list`.
-  ///
-  /// Filtered by `isAccessible && isEnabled`, which is the engine's own
-  /// mentionability rule (`tui/src/chatwidget/skills.rs::is_app_mentionable`,
-  /// applied identically in `chat_composer.rs` when building the popup) — not
-  /// a display preference. Listing an app that fails it would offer a mention
-  /// the engine then refuses to resolve.
+  /**
+   * The 插件 section: connectors from `app/list`.
+   *
+   * Filtered by `isAccessible && isEnabled`, which is the engine's own
+   * mentionability rule (`tui/src/chatwidget/skills.rs::is_app_mentionable`,
+   * applied identically in `chat_composer.rs` when building the popup) — not
+   * a display preference. Listing an app that fails it would offer a mention
+   * the engine then refuses to resolve.
+   */
   const appMatches = useMemo(() => {
     if (!fileQuery) return [];
     const needle = fileQuery.query.toLowerCase();
@@ -356,12 +392,14 @@ export function Composer({ threadId }: { threadId: string }) {
       .slice(0, 6);
   }, [fileQuery, state.apps]);
 
-  /// Whether 计划模式 can be offered at all.
-  ///
-  /// Gated on the engine actually reporting a `plan` preset from
-  /// `collaborationMode/list` rather than on a hardcoded name: the RPC is
-  /// experimental, and offering a mode this build cannot set would be exactly
-  /// the faked control ADR-0021 forbids.
+  /**
+   * Whether 计划模式 can be offered at all.
+   *
+   * Gated on the engine actually reporting a `plan` preset from
+   * `collaborationMode/list` rather than on a hardcoded name: the RPC is
+   * experimental, and offering a mode this build cannot set would be exactly
+   * the faked control ADR-0021 forbids.
+   */
   const planPreset = useMemo(
     () => state.collaborationModes.find((preset) => preset.mode === "plan" && preset.visible),
     [state.collaborationModes],
@@ -389,9 +427,11 @@ export function Composer({ threadId }: { threadId: string }) {
     return entries;
   }, [fileQuery, fileMatches, appMatches, planPreset, turnRunning]);
 
-  /// Removes the `@token` the menu was triggered from, without inserting
-  /// anything — used when the chosen entry opens a panel instead of producing
-  /// text.
+  /**
+   * Removes the `@token` the menu was triggered from, without inserting
+   * anything — used when the chosen entry opens a panel instead of producing
+   * text.
+   */
   function consumeMentionToken() {
     if (!fileQuery) return;
     const caret = textareaRef.current?.selectionStart ?? text.length;
@@ -426,12 +466,14 @@ export function Composer({ threadId }: { threadId: string }) {
     }
   }
 
-  /// Inserts an app mention: the `@token` in the text *and* the structured
-  /// item, the same two-part shape `$skill` uses.
-  ///
-  /// The token comes from Rust rather than being formatted here — it is the
-  /// engine's `connector_name_slug`, and a second implementation in TS would
-  /// drift (`src/composer.rs::mention_token`).
+  /**
+   * Inserts an app mention: the `@token` in the text *and* the structured
+   * item, the same two-part shape `$skill` uses.
+   *
+   * The token comes from Rust rather than being formatted here — it is the
+   * engine's `connector_name_slug`, and a second implementation in TS would
+   * drift (`src/composer.rs::mention_token`).
+   */
   async function chooseApp(app: AppInfo) {
     if (!fileQuery) return;
     const mention: ComposerMention = { kind: "app", id: app.id, name: app.name };
@@ -449,15 +491,17 @@ export function Composer({ threadId }: { threadId: string }) {
     queueMicrotask(() => textareaRef.current?.focus());
   }
 
-  /// Two entries — 文件 and 文件夹 — rather than the Official App's single
-  /// 文件和文件夹: the dialog plugin's `directory` option is a boolean switch
-  /// between file mode and folder mode with no combined mode, so one entry
-  /// would have to promise more than the dialog behind it delivers.
-  ///
-  /// Picked paths become chips, not text — the Official App's presentation.
-  /// Absolute paths are shortened against the Project they came from, matching
-  /// what the `@` typeahead inserts (`fuzzyFileSearch` returns paths relative
-  /// to their root).
+  /**
+   * Two entries — 文件 and 文件夹 — rather than the Official App's single
+   * 文件和文件夹: the dialog plugin's `directory` option is a boolean switch
+   * between file mode and folder mode with no combined mode, so one entry
+   * would have to promise more than the dialog behind it delivers.
+   *
+   * Picked paths become chips, not text — the Official App's presentation.
+   * Absolute paths are shortened against the Project they came from, matching
+   * what the `@` typeahead inserts (`fuzzyFileSearch` returns paths relative
+   * to their root).
+   */
   async function handlePickPaths(what: "files" | "folders") {
     const picked = what === "files" ? await api.pickAnyFiles() : await api.pickAnyFolders();
     if (!picked) return;
@@ -479,8 +523,10 @@ export function Composer({ threadId }: { threadId: string }) {
     return path;
   }
 
-  /// 计划模式 is a collaboration mode, not a flag: selecting it applies the
-  /// engine's `plan` preset, and selecting it again returns to `default`.
+  /**
+   * 计划模式 is a collaboration mode, not a flag: selecting it applies the
+   * engine's `plan` preset, and selecting it again returns to `default`.
+   */
   async function handlePlanToggle() {
     setModeError(null);
     try {
@@ -503,8 +549,10 @@ export function Composer({ threadId }: { threadId: string }) {
     queueMicrotask(() => textareaRef.current?.focus());
   }
 
-  /// Replaces the partially-typed `$que` with the full `$name` and records the
-  /// structured skill.
+  /**
+   * Replaces the partially-typed `$que` with the full `$name` and records the
+   * structured skill.
+   */
   function chooseSkill(skill: SkillMetadata) {
     if (!skillQuery) return;
     const caret = textareaRef.current?.selectionStart ?? text.length;
@@ -531,13 +579,15 @@ export function Composer({ threadId }: { threadId: string }) {
     ]);
   }
 
-  /// Sends, or queues when a turn is already running.
-  ///
-  /// Queuing is not a client-side buffer: `thread/queue/add` hands the
-  /// submission to the engine, which dispatches it itself when the turn ends
-  /// (`QueuedItemService::on_thread_idle`). Nothing here starts queued work —
-  /// doing so on turn completion would race the engine's own dispatch and
-  /// could run a submission twice.
+  /**
+   * Sends, or queues when a turn is already running.
+   *
+   * Queuing is not a client-side buffer: `thread/queue/add` hands the
+   * submission to the engine, which dispatches it itself when the turn ends
+   * (`QueuedItemService::on_thread_idle`). Nothing here starts queued work —
+   * doing so on turn completion would race the engine's own dispatch and
+   * could run a submission twice.
+   */
   async function handleSend() {
     const trimmed = text.trim();
     // An image or a referenced file with no caption is a real message, so

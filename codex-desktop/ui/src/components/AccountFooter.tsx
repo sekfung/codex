@@ -4,11 +4,13 @@ import { useStore } from "../store";
 import type { Account, PlanType, RateLimitSnapshot } from "../types";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
-/// Identity + plan in the sidebar footer, read from `account/read` and kept
-/// current by `account/updated` (ADR-0021: never by reading `auth.json`).
-///
-/// Read-only by construction — this app has no billing, upgrade or top-up
-/// path anywhere, so there is nothing to click through to here.
+/**
+ * Identity + plan in the sidebar footer, read from `account/read` and kept
+ * current by `account/updated` (ADR-0021: never by reading `auth.json`).
+ *
+ * Read-only by construction — this app has no billing, upgrade or top-up
+ * path anywhere, so there is nothing to click through to here.
+ */
 export function AccountFooter() {
   const { state } = useStore();
   const { account, requiresOpenaiAuth, rateLimits } = state;
@@ -63,8 +65,10 @@ function accountLabel(
   }
 }
 
-/// Second line: plan, plus a usage note when the backend itself reports the
-/// limit as reached. Never a threshold this app invents.
+/**
+ * Second line: plan, plus a usage note when the backend itself reports the
+ * limit as reached. Never a threshold this app invents.
+ */
 function accountDetail(account: Account | null, rateLimits: RateLimitSnapshot | null): string {
   const parts: string[] = [];
 
@@ -83,9 +87,11 @@ function accountDetail(account: Account | null, rateLimits: RateLimitSnapshot | 
   return parts.join(" · ");
 }
 
-/// True only when the *server* says usage is blocked. `rateLimitReachedType`
-/// and `spendControlReached` are backend-reported fields; `null` on either
-/// means "unavailable", not "fine", so neither is treated as a negative.
+/**
+ * True only when the *server* says usage is blocked. `rateLimitReachedType`
+ * and `spendControlReached` are backend-reported fields; `null` on either
+ * means "unavailable", not "fine", so neither is treated as a negative.
+ */
 export function usageExhausted(rateLimits: RateLimitSnapshot | null): boolean {
   if (!rateLimits) return false;
   return rateLimits.rateLimitReachedType != null || rateLimits.spendControlReached === true;
@@ -106,7 +112,7 @@ function planLabel(plan: PlanType): string {
   return PLAN_LABELS[plan] ?? plan;
 }
 
-/// `resetsAt` is Unix **seconds** on the wire (`RateLimitWindow.resets_at`).
+/** `resetsAt` is Unix **seconds** on the wire (`RateLimitWindow.resets_at`). */
 export function formatResetTime(resetsAtSeconds: number): string {
   const date = new Date(resetsAtSeconds * 1000);
   if (Number.isNaN(date.getTime())) return "";

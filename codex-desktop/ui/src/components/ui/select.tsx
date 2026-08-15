@@ -12,20 +12,26 @@ import { cn } from "@/lib/utils";
 export interface SelectOption<T extends string> {
   value: T;
   label: string;
-  /// Optional second line, used where a value's meaning isn't obvious from
-  /// its label alone (reasoning efforts, web-search modes).
+  /**
+   * Optional second line, used where a value's meaning isn't obvious from
+   * its label alone (reasoning efforts, web-search modes).
+   */
   hint?: string;
 }
 
 interface SelectProps<T extends string> {
   value: T | null;
   options: SelectOption<T>[];
-  /// Optional so a `disabled` placeholder select — a setting this build shows
-  /// but can't yet write — doesn't have to pass a no-op handler that would
-  /// read as if it were wired up.
+  /**
+   * Optional so a `disabled` placeholder select — a setting this build shows
+   * but can't yet write — doesn't have to pass a no-op handler that would
+   * read as if it were wired up.
+   */
   onValueChange?: (value: T) => void;
-  /// Shown when `value` is null or names an option that isn't in the list —
-  /// e.g. a config written by the CLI that this build doesn't offer.
+  /**
+   * Shown when `value` is null or names an option that isn't in the list —
+   * e.g. a config written by the CLI that this build doesn't offer.
+   */
   placeholder?: string;
   disabled?: boolean;
   align?: "start" | "center" | "end";

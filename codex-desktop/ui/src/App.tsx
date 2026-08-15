@@ -60,7 +60,7 @@ function AppShell() {
   );
 }
 
-/// `null` while checking, `""` for ready, otherwise the failure reason.
+/** `null` while checking, `""` for ready, otherwise the failure reason. */
 type StartupState = null | "" | string;
 
 function App() {

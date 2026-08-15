@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Download, Loader2, RefreshCw, Search, Trash2 } from "lucide-react";
 
 import { useStore } from "../../store";
+import { useAsyncAction } from "./useAsyncAction";
 import * as api from "../../api";
 import type { PluginMarketplaceEntry, PluginSummary } from "../../types";
 import { SettingRow, SettingsHeader, SettingsSection } from "./SettingsPrimitives";
@@ -31,8 +32,7 @@ export function PluginsSettings() {
   const [installed, setInstalled] = useState<PluginMarketplaceEntry[] | null>(null);
   const [catalog, setCatalog] = useState<PluginMarketplaceEntry[] | null>(null);
   const [loadErrors, setLoadErrors] = useState<string[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
+  const { busyKey, isBusy, error, setError, run } = useAsyncAction();
   const [query, setQuery] = useState("");
   const [confirmingUninstall, setConfirmingUninstall] = useState<string | null>(null);
   const [source, setSource] = useState("");
@@ -69,21 +69,6 @@ export function PluginsSettings() {
     void load();
   }, [load]);
 
-  async function run(key: string, action: () => Promise<unknown>) {
-    setBusy(key);
-    setError(null);
-    try {
-      await action();
-      await load();
-    } catch (err) {
-      // Surfacing the failure matters more here than anywhere else on this
-      // screen: install/uninstall change what the agent can do.
-      setError(String(err));
-    } finally {
-      setBusy(null);
-      setConfirmingUninstall(null);
-    }
-  }
 
   const installedPlugins = (installed ?? []).flatMap((entry) =>
     entry.plugins.filter((plugin) => plugin.installed),
@@ -112,7 +97,7 @@ export function PluginsSettings() {
       <SettingsSection
         title="已安装"
         action={
-          <Button variant="outline" size="xs" onClick={() => void load()} disabled={busy !== null}>
+          <Button variant="outline" size="xs" onClick={() => void load()} disabled={busyKey !== null}>
             <RefreshCw />
             刷新
           </Button>
@@ -134,9 +119,9 @@ export function PluginsSettings() {
                       size="xs"
                       variant="ghost"
                       className="text-destructive hover:text-destructive"
-                      disabled={busy !== null}
+                      disabled={busyKey !== null}
                       onClick={() =>
-                        void run(plugin.id, () => api.uninstallPlugin(plugin.id))
+                        void run(() => api.uninstallPlugin(plugin.id), { key: plugin.id })
                       }
                     >
                       确认卸载
@@ -153,10 +138,10 @@ export function PluginsSettings() {
                   <Button
                     size="xs"
                     variant="outline"
-                    disabled={busy !== null}
+                    disabled={busyKey !== null}
                     onClick={() => setConfirmingUninstall(plugin.id)}
                   >
-                    {busy === plugin.id ? <Loader2 className="animate-spin" /> : <Trash2 />}
+                    {isBusy(plugin.id) ? <Loader2 className="animate-spin" /> : <Trash2 />}
                     卸载
                   </Button>
                 )
@@ -195,18 +180,20 @@ export function PluginsSettings() {
                   control={
                     <Button
                       size="xs"
-                      disabled={busy !== null || plugin.installPolicy === "NOT_AVAILABLE"}
+                      disabled={busyKey !== null || plugin.installPolicy === "NOT_AVAILABLE"}
                       onClick={() =>
-                        void run(plugin.id, () =>
-                          api.installPlugin(
-                            plugin.name,
-                            entry.path ?? null,
-                            entry.path ? null : entry.name,
-                          ),
+                        void run(
+                          () =>
+                            api.installPlugin(
+                              plugin.name,
+                              entry.path ?? null,
+                              entry.path ? null : entry.name,
+                            ),
+                          { key: plugin.id },
                         )
                       }
                     >
-                      {busy === plugin.id ? <Loader2 className="animate-spin" /> : <Download />}
+                      {isBusy(plugin.id) ? <Loader2 className="animate-spin" /> : <Download />}
                       安装
                     </Button>
                   }
@@ -223,10 +210,10 @@ export function PluginsSettings() {
           <Button
             variant="outline"
             size="xs"
-            disabled={busy !== null}
-            onClick={() => void run("__upgrade__", () => api.upgradeMarketplace(null))}
+            disabled={busyKey !== null}
+            onClick={() => void run(() => api.upgradeMarketplace(null), { key: "__upgrade__" })}
           >
-            {busy === "__upgrade__" ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+            {isBusy("__upgrade__") ? <Loader2 className="animate-spin" /> : <RefreshCw />}
             全部升级
           </Button>
         }
@@ -242,8 +229,8 @@ export function PluginsSettings() {
                   size="xs"
                   variant="ghost"
                   className="text-destructive hover:text-destructive"
-                  disabled={busy !== null}
-                  onClick={() => void run(entry.name, () => api.removeMarketplace(entry.name))}
+                  disabled={busyKey !== null}
+                  onClick={() => void run(() => api.removeMarketplace(entry.name), { key: entry.name })}
                 >
                   移除
                 </Button>
@@ -261,12 +248,12 @@ export function PluginsSettings() {
           <Button
             size="xs"
             variant="outline"
-            disabled={busy !== null || source.trim().length === 0}
+            disabled={busyKey !== null || source.trim().length === 0}
             onClick={() =>
-              void run("__add__", async () => {
+              void run(async () => {
                 await api.addMarketplace(source.trim());
                 setSource("");
-              })
+              }, { key: "__add__" })
             }
           >
             添加

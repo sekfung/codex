@@ -1,12 +1,14 @@
 import { OctagonAlert } from "lucide-react";
 
-/// Shown instead of the app when the embedded app-server did not start.
-///
-/// Every RPC-backed command takes `State<'_, AppServerBridge>`, which is only
-/// managed on a successful start (`main.rs`). Without this screen the window
-/// opens and renders normally, and each action fails with Tauri's opaque
-/// unmanaged-state error — an app that looks fine and does nothing. The
-/// reason itself only ever reached stderr, which nobody reading a GUI sees.
+/**
+ * Shown instead of the app when the embedded app-server did not start.
+ *
+ * Every RPC-backed command takes `State<'_, AppServerBridge>`, which is only
+ * managed on a successful start (`main.rs`). Without this screen the window
+ * opens and renders normally, and each action fails with Tauri's opaque
+ * unmanaged-state error — an app that looks fine and does nothing. The
+ * reason itself only ever reached stderr, which nobody reading a GUI sees.
+ */
 export function StartupFailure({ reason }: { reason: string }) {
   return (
     <div className="flex h-full w-full items-center justify-center bg-background px-6 text-foreground">

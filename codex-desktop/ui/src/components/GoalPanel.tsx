@@ -7,11 +7,13 @@ import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 
-/// `thread/goal/*`.
-///
-/// A goal persists across turns — the Official App describes it as
-/// "设置要持续追求的目标" — so it reads as standing context above the composer
-/// rather than as a field inside one message.
+/**
+ * `thread/goal/*`.
+ *
+ * A goal persists across turns — the Official App describes it as
+ * "设置要持续追求的目标" — so it reads as standing context above the composer
+ * rather than as a field inside one message.
+ */
 
 const STATUS_LABELS: Record<ThreadGoalStatus, string> = {
   active: "进行中",
@@ -22,9 +24,11 @@ const STATUS_LABELS: Record<ThreadGoalStatus, string> = {
   complete: "已完成",
 };
 
-/// Only these three are a user's to choose. `usageLimited`/`budgetLimited` are
-/// set by the engine when a goal exhausts its allowance, and offering them
-/// would imply this client can put a goal into a state it cannot.
+/**
+ * Only these three are a user's to choose. `usageLimited`/`budgetLimited` are
+ * set by the engine when a goal exhausts its allowance, and offering them
+ * would imply this client can put a goal into a state it cannot.
+ */
 const SELECTABLE_STATUSES: ThreadGoalStatus[] = ["active", "paused", "complete"];
 
 function formatTokens(value: number): string {

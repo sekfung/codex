@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ExternalLink, Loader2, LogOut } from "lucide-react";
 
 import { useStore } from "../../store";
+import { useAsyncAction } from "./useAsyncAction";
 import * as api from "../../api";
 import { formatResetTime, usageExhausted } from "../AccountFooter";
 import type { AccountTokenUsageSummary, PlanType } from "../../types";
@@ -38,8 +39,7 @@ export function AccountSettings() {
   const { state, startLogin, cancelLogin, logout, refreshAccount } = useStore();
   const { account, requiresOpenaiAuth, rateLimits, pendingLogin } = state;
   const [usage, setUsage] = useState<AccountTokenUsageSummary | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { busyKey, isBusy, error, run } = useAsyncAction();
 
   useEffect(() => {
     // Usage is signed-in-only; asking while signed out just produces an error
@@ -54,17 +54,6 @@ export function AccountSettings() {
       .catch(() => setUsage(null));
   }, [account]);
 
-  async function run(key: string, action: () => Promise<void>) {
-    setBusy(key);
-    setError(null);
-    try {
-      await action();
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setBusy(null);
-    }
-  }
 
   const signedOut = !account;
 
@@ -95,8 +84,8 @@ export function AccountSettings() {
                   <Button
                     size="xs"
                     variant="ghost"
-                    disabled={busy !== null}
-                    onClick={() => void run("cancel", cancelLogin)}
+                    disabled={busyKey !== null}
+                    onClick={() => void run(cancelLogin, { key: "cancel" })}
                   >
                     取消
                   </Button>
@@ -104,10 +93,10 @@ export function AccountSettings() {
               ) : (
                 <Button
                   size="xs"
-                  disabled={busy !== null}
-                  onClick={() => void run("login", startLogin)}
+                  disabled={busyKey !== null}
+                  onClick={() => void run(startLogin, { key: "login" })}
                 >
-                  {busy === "login" ? <Loader2 className="animate-spin" /> : <ExternalLink />}
+                  {isBusy("login") ? <Loader2 className="animate-spin" /> : <ExternalLink />}
                   登录
                 </Button>
               )
@@ -122,10 +111,10 @@ export function AccountSettings() {
                 <Button
                   size="xs"
                   variant="outline"
-                  disabled={busy !== null}
-                  onClick={() => void run("logout", logout)}
+                  disabled={busyKey !== null}
+                  onClick={() => void run(logout, { key: "logout" })}
                 >
-                  {busy === "logout" ? <Loader2 className="animate-spin" /> : <LogOut />}
+                  {isBusy("logout") ? <Loader2 className="animate-spin" /> : <LogOut />}
                   退出登录
                 </Button>
               }

@@ -111,3 +111,61 @@ fn untracked_diff_compares_against_the_null_device() {
     assert!(args.contains(&"--no-index"));
     assert!(args.contains(&null_device()));
 }
+
+/// The frontend switches on these strings (`RemoteDiffUnavailable` in
+/// `types.ts`), so their camelCase spelling is the contract — a rename here
+/// would silently turn both empty states into "no answer at all".
+#[test]
+fn remote_diff_unavailable_reasons_are_camel_case_on_the_wire() {
+    assert_eq!(
+        serde_json::to_value(RemoteDiffUnavailable::NotAGitRepo).expect("serialize"),
+        serde_json::json!("notAGitRepo")
+    );
+    assert_eq!(
+        serde_json::to_value(RemoteDiffUnavailable::NoRemote).expect("serialize"),
+        serde_json::json!("noRemote")
+    );
+}
+
+/// An available comparison must send `unavailable: null` rather than omitting
+/// the field: the UI treats "absent reason" as the signal that `sha` and
+/// `diff` are meaningful, and a missing key would read the same as an error.
+#[test]
+fn available_remote_diff_states_its_absence_of_reason() {
+    let json = serde_json::to_value(RemoteDiffResult {
+        unavailable: None,
+        sha: "abc1234".to_string(),
+        diff: "diff --git a/x b/x\n".to_string(),
+    })
+    .expect("serialize");
+
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "unavailable": null,
+            "sha": "abc1234",
+            "diff": "diff --git a/x b/x\n",
+        })
+    );
+}
+
+/// Binary files come back as `-\t-\t<path>`. They must contribute zero rather
+/// than aborting the sum, which is what an unwrapped parse would do.
+#[test]
+fn numstat_sum_skips_binary_files() {
+    let stats = sum_numstat("12\t3\tsrc/a.rs\n-\t-\timg.png\n4\t0\tsrc/b.rs\n");
+    assert_eq!(
+        stats,
+        BranchChangeStats {
+            additions: 16,
+            deletions: 3,
+        }
+    );
+}
+
+/// An empty range produces empty stdout, which is a real answer (no commits
+/// on this branch yet) and must read as zero rather than as a parse failure.
+#[test]
+fn numstat_sum_of_nothing_is_zero() {
+    assert_eq!(sum_numstat(""), BranchChangeStats::default());
+}

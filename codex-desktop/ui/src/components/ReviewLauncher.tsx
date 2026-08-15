@@ -9,11 +9,13 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 
-/// `review/start` — the CLI's `codex review`.
-///
-/// `ReviewTarget` is a four-variant tagged union, so this is a small form
-/// rather than one button: the engine can review the working tree, a diff
-/// against a base branch, a single commit, or free-form instructions.
+/**
+ * `review/start` — the CLI's `codex review`.
+ *
+ * `ReviewTarget` is a four-variant tagged union, so this is a small form
+ * rather than one button: the engine can review the working tree, a diff
+ * against a base branch, a single commit, or free-form instructions.
+ */
 type TargetKind = ReviewTargetInput["kind"];
 
 const TARGETS: Array<{ kind: TargetKind; label: string; hint: string }> = [
@@ -23,24 +25,28 @@ const TARGETS: Array<{ kind: TargetKind; label: string; hint: string }> = [
   { kind: "custom", label: "自定义要求", hint: "自由描述要审查什么" },
 ];
 
-/// The two targets that only mean something inside a git work tree.
+/** The two targets that only mean something inside a git work tree. */
 const GIT_TARGETS = new Set<TargetKind>(["baseBranch", "commit"]);
 
-/// `ReviewDelivery`. The Official App surfaces this in its Git settings as
-/// "代码审查发送方式", but it is a per-request parameter, not a stored
-/// preference: `turn_processor.rs` reads it as `delivery.unwrap_or(Inline)` and
-/// no config key backs it. That is why it lives here, at the point of use,
-/// rather than on a settings screen.
+/**
+ * `ReviewDelivery`. The Official App surfaces this in its Git settings as
+ * "代码审查发送方式", but it is a per-request parameter, not a stored
+ * preference: `turn_processor.rs` reads it as `delivery.unwrap_or(Inline)` and
+ * no config key backs it. That is why it lives here, at the point of use,
+ * rather than on a settings screen.
+ */
 const DELIVERIES: Array<{ value: ReviewDelivery; label: string; hint: string }> = [
   { value: "inline", label: "在此聊天中进行", hint: "审查结果出现在当前对话里" },
   { value: "detached", label: "独立对话", hint: "另开一个审查对话，完成后自动切换过去" },
 ];
 
-/// Candidate chips under a free-text field.
-///
-/// Deliberately additive: the field stays editable, so a branch that is not in
-/// the list (a remote-tracking ref, a tag) can still be typed. The chips are a
-/// shortcut, not a constraint — `local_git_branches` only knows local heads.
+/**
+ * Candidate chips under a free-text field.
+ *
+ * Deliberately additive: the field stays editable, so a branch that is not in
+ * the list (a remote-tracking ref, a tag) can still be typed. The chips are a
+ * shortcut, not a constraint — `local_git_branches` only knows local heads.
+ */
 function RefChips({
   items,
   selected,
@@ -88,11 +94,13 @@ export function ReviewLauncher({ threadId }: { threadId: string }) {
   // threads opened from search. See `lib/threads.ts`.
   const cwd = threadCwd(state.threadsByProject, threadId) ?? state.activeProjectPath;
 
-  /// Candidates are fetched when the popover opens, not on mount: branches and
-  /// commits change under the app, and this shells out to git, so paying for it
-  /// on every chat render would be wrong. A failure is swallowed rather than
-  /// surfaced — the inputs stay usable as free text, which is exactly the
-  /// previous behavior, so there is nothing the user must act on.
+  /**
+   * Candidates are fetched when the popover opens, not on mount: branches and
+   * commits change under the app, and this shells out to git, so paying for it
+   * on every chat render would be wrong. A failure is swallowed rather than
+   * surfaced — the inputs stay usable as free text, which is exactly the
+   * previous behavior, so there is nothing the user must act on.
+   */
   async function loadRefs() {
     if (!cwd) return;
     try {
@@ -112,9 +120,11 @@ export function ReviewLauncher({ threadId }: { threadId: string }) {
   // `isGitRepo: false` is a definite answer, not a loading state.
   const targets = refs && !refs.isGitRepo ? TARGETS.filter((t) => !GIT_TARGETS.has(t.kind)) : TARGETS;
 
-  /// Returns null when the chosen variant still needs input, which is what
-  /// disables the submit button — rather than sending an empty branch/sha the
-  /// engine would reject.
+  /**
+   * Returns null when the chosen variant still needs input, which is what
+   * disables the submit button — rather than sending an empty branch/sha the
+   * engine would reject.
+   */
   function buildTarget(): ReviewTargetInput | null {
     switch (kind) {
       case "uncommittedChanges":

@@ -4,9 +4,11 @@ import { useStore } from "../../store";
 import { configLayerLabel } from "../../types";
 import { cn } from "@/lib/utils";
 
-/// Layout primitives shared by the settings screens, so a control that is
-/// genuinely wired and one that isn't are visibly different rather than
-/// looking identical and silently doing nothing.
+/**
+ * Layout primitives shared by the settings screens, so a control that is
+ * genuinely wired and one that isn't are visibly different rather than
+ * looking identical and silently doing nothing.
+ */
 
 export function SettingsHeader({ title, description }: { title: string; description?: ReactNode }) {
   return (
@@ -50,8 +52,10 @@ export function SettingRow({
   description?: ReactNode;
   control: ReactNode;
   disabled?: boolean;
-  /// Short reason shown when a control is inert — never leave a dead control
-  /// looking live.
+  /**
+   * Short reason shown when a control is inert — never leave a dead control
+   * looking live.
+   */
   note?: string;
 }) {
   return (
@@ -68,9 +72,11 @@ export function SettingRow({
   );
 }
 
-/// Marks a value that a managed or project config layer pins, so the user
-/// understands why their edit didn't stick. `origins` comes from
-/// `config/read`; the user's own layer is the uninteresting case.
+/**
+ * Marks a value that a managed or project config layer pins, so the user
+ * understands why their edit didn't stick. `origins` comes from
+ * `config/read`; the user's own layer is the uninteresting case.
+ */
 export function OriginNote({ keyPath }: { keyPath: string }) {
   const { state } = useStore();
   const origin = state.configOrigins[keyPath];
@@ -86,8 +92,10 @@ export function OriginNote({ keyPath }: { keyPath: string }) {
   );
 }
 
-/// Shown in place of controls while `config/read` hasn't resolved, so the
-/// screens never render defaults that misrepresent the stored config.
+/**
+ * Shown in place of controls while `config/read` hasn't resolved, so the
+ * screens never render defaults that misrepresent the stored config.
+ */
 export function ConfigPending() {
   return (
     <div className="rounded-xl border border-border px-4 py-6 text-center text-sm text-muted-foreground">

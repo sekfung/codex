@@ -45,9 +45,11 @@ export function Sidebar() {
   const { mode, setMode } = useTheme();
   const [manualPath, setManualPath] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
-  /// Inline rather than a notice: the user is looking at these controls when
-  /// it fails, and a rejected path (not a directory, no permission) is about
-  /// the input right here. Silently doing nothing was the previous behavior.
+  /**
+   * Inline rather than a notice: the user is looking at these controls when
+   * it fails, and a rejected path (not a directory, no permission) is about
+   * the input right here. Silently doing nothing was the previous behavior.
+   */
   const [addError, setAddError] = useState<string | null>(null);
 
   const searching = searchOpen || state.search.term.length > 0;
@@ -221,8 +223,10 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
-/// Starts a thread in the active Project. Disabled — with the reason stated —
-/// when no Project is selected, rather than silently doing nothing.
+/**
+ * Starts a thread in the active Project. Disabled — with the reason stated —
+ * when no Project is selected, rather than silently doing nothing.
+ */
 function NewThreadNavItem() {
   const { state, startNewThread } = useStore();
   const path = state.activeProjectPath;
@@ -270,9 +274,11 @@ function NewThreadNavItem() {
   );
 }
 
-/// Search replaces the Project tree while active. Results come from
-/// `thread/search`, which spans every Project — so each row names the folder
-/// it belongs to.
+/**
+ * Search replaces the Project tree while active. Results come from
+ * `thread/search`, which spans every Project — so each row names the folder
+ * it belongs to.
+ */
 function SearchPane({ onClose }: { onClose: () => void }) {
   const { state, setSearchTerm, setActiveThread } = useStore();
   const { term, status, results, error } = state.search;
@@ -558,9 +564,11 @@ function ThreadRow({
   );
 }
 
-/// Delete confirms in place rather than in a dialog — there's no dialog
-/// primitive here (see `menu.tsx`), and a two-step menu keeps the destructive
-/// action from being one stray click away.
+/**
+ * Delete confirms in place rather than in a dialog — there's no dialog
+ * primitive here (see `menu.tsx`), and a two-step menu keeps the destructive
+ * action from being one stray click away.
+ */
 function ThreadMenuContent({
   archived,
   onRename,

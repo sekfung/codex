@@ -3,6 +3,7 @@ import { Loader2, TriangleAlert } from "lucide-react";
 
 import * as api from "../../api";
 import { useStore } from "../../store";
+import { useAsyncAction } from "./useAsyncAction";
 import type { MemorySettings } from "../../types";
 import { ConfigPending, OriginNote, SettingRow, SettingsHeader, SettingsSection } from "./SettingsPrimitives";
 import { Button } from "@/components/ui/button";
@@ -28,8 +29,7 @@ import { Switch } from "@/components/ui/switch";
 export function MemoriesSettings() {
   const { state } = useStore();
   const [settings, setSettings] = useState<MemorySettings | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { busy, error, setError, run } = useAsyncAction();
   const [confirmingReset, setConfirmingReset] = useState(false);
   const [resetNote, setResetNote] = useState<string | null>(null);
 
@@ -42,39 +42,28 @@ export function MemoriesSettings() {
 
   async function apply(next: MemorySettings) {
     const previous = settings;
-    setBusy(true);
-    setError(null);
     // Optimistic: the toggle should not lag a round-trip. Rolled back below if
     // the write fails, so a failure never leaves the UI claiming a setting
     // that was not stored.
     setSettings(next);
-    try {
-      await api.setMemorySettings(
-        next,
-        state.activeThreadId,
-        previous ? previous.generateMemories !== next.generateMemories : false,
-      );
-    } catch (err) {
-      setSettings(previous);
-      setError(String(err));
-    } finally {
-      setBusy(false);
-    }
+    await run(
+      () =>
+        api.setMemorySettings(
+          next,
+          state.activeThreadId,
+          previous ? previous.generateMemories !== next.generateMemories : false,
+        ),
+      { onError: () => setSettings(previous) },
+    );
   }
 
   async function reset() {
-    setBusy(true);
-    setError(null);
     setResetNote(null);
-    try {
+    await run(async () => {
       await api.resetMemories();
       setResetNote("已清除本机记忆。");
       setConfirmingReset(false);
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setBusy(false);
-    }
+    });
   }
 
   if (!settings) {

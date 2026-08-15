@@ -43,8 +43,10 @@ const SKIPPED_TYPES = new Set([
 
 const GENERIC_TIER_TYPES = new Set(["mcpToolCall", "webSearch", "imageGeneration"]);
 
-/// Shared column so messages, activity rows and approval cards all align on
-/// one comfortable measure rather than stretching to the window width.
+/**
+ * Shared column so messages, activity rows and approval cards all align on
+ * one comfortable measure rather than stretching to the window width.
+ */
 const COLUMN = "mx-auto w-full max-w-3xl px-6";
 
 export function ChatStream({ threadId }: { threadId: string }) {
@@ -101,10 +103,12 @@ export function ChatStream({ threadId }: { threadId: string }) {
   );
 }
 
-/// Live counterpart to the finished "已处理 Xs" rows: while a turn is running
-/// there is otherwise nothing between the last completed item and the next
-/// one. Hidden while an approval is pending — the composer's banner already
-/// says what's happening then, and "working" would be misleading.
+/**
+ * Live counterpart to the finished "已处理 Xs" rows: while a turn is running
+ * there is otherwise nothing between the last completed item and the next
+ * one. Hidden while an approval is pending — the composer's banner already
+ * says what's happening then, and "working" would be misleading.
+ */
 function WorkingRow({ thread }: { thread: ThreadState }) {
   const running =
     thread.activeTurnId !== null && thread.turnStatus[thread.activeTurnId] === "inProgress";
@@ -199,9 +203,11 @@ function ItemRenderer({
   }
 }
 
-/// The muted single-line activity row the reference screenshots use for
-/// anything that isn't a message — quiet by default so the conversation reads
-/// as prose rather than as a log.
+/**
+ * The muted single-line activity row the reference screenshots use for
+ * anything that isn't a message — quiet by default so the conversation reads
+ * as prose rather than as a log.
+ */
 function ActivityRow({
   Icon,
   label,
@@ -243,9 +249,11 @@ function ActivityRow({
   );
 }
 
-/// Marks where a review begins and ends. `review` carries the engine's own
-/// user-facing hint (`CoreTurnItem::EnteredReviewMode.user_facing_hint`), so
-/// it is shown verbatim rather than reworded.
+/**
+ * Marks where a review begins and ends. `review` carries the engine's own
+ * user-facing hint (`CoreTurnItem::EnteredReviewMode.user_facing_hint`), so
+ * it is shown verbatim rather than reworded.
+ */
 function ReviewBoundary({ label, entering }: { label: string; entering: boolean }) {
   return (
     <div className="flex items-center gap-2.5 py-0.5">
@@ -303,18 +311,20 @@ function UserMessageView({
   );
 }
 
-/// `thread/revert` from a user message: drops that turn and everything after
-/// it.
-///
-/// Deliberately worded to say what revert does *not* do. The engine rewrites
-/// conversation history only — `thread-store`'s `revert_thread` writes a new
-/// rollout referencing the retained prefix and moves a pointer, never
-/// touching the working tree. Someone reading "revert" as "undo the edits"
-/// would otherwise assume their files had been restored when they had not.
-///
-/// Two-step confirm, matching the sidebar's thread delete: this is not
-/// recoverable from inside the app even though the engine retains the old
-/// rollout.
+/**
+ * `thread/revert` from a user message: drops that turn and everything after
+ * it.
+ *
+ * Deliberately worded to say what revert does *not* do. The engine rewrites
+ * conversation history only — `thread-store`'s `revert_thread` writes a new
+ * rollout referencing the retained prefix and moves a pointer, never
+ * touching the working tree. Someone reading "revert" as "undo the edits"
+ * would otherwise assume their files had been restored when they had not.
+ *
+ * Two-step confirm, matching the sidebar's thread delete: this is not
+ * recoverable from inside the app even though the engine retains the old
+ * rollout.
+ */
 function RevertAction({ threadId, turnId }: { threadId: string; turnId: string }) {
   const { state, revertThread } = useStore();
   const [confirming, setConfirming] = useState(false);

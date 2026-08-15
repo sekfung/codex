@@ -19,9 +19,11 @@ import { Button } from "@/components/ui/button";
 // `copy_dir_recursive_skip_existing`. Nothing it does replaces an existing
 // value, so re-running it is safe and simply finds less to do.
 
-/// `ExternalAgentConfigMigrationItemType` values, which are SCREAMING_CASE on
-/// the wire. Rendering falls back to the raw value so an item type this build
-/// does not know about is still shown rather than silently dropped.
+/**
+ * `ExternalAgentConfigMigrationItemType` values, which are SCREAMING_CASE on
+ * the wire. Rendering falls back to the raw value so an item type this build
+ * does not know about is still shown rather than silently dropped.
+ */
 const ITEM_TYPE_LABELS: Record<string, string> = {
   AGENTS_MD: "AGENTS.md 指令",
   CONFIG: "配置",
@@ -186,10 +188,12 @@ export function ImportSettings() {
   );
 }
 
-/// Per-item outcomes from `externalAgentConfig/import/progress`/`completed`.
-///
-/// Without these the screen could only say an import had started: the import
-/// request's response carries nothing but an id.
+/**
+ * Per-item outcomes from `externalAgentConfig/import/progress`/`completed`.
+ *
+ * Without these the screen could only say an import had started: the import
+ * request's response carries nothing but an id.
+ */
 function ImportResults({ progress }: { progress: ImportProgress }) {
   if (progress.results.length === 0) return null;
   return (

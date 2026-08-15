@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
 import { Loader2 } from "lucide-react";
 
 import * as api from "../../api";
 import { useStore } from "../../store";
+import { useAsyncAction } from "./useAsyncAction";
 import type { SkillMetadata } from "../../types";
 import { skillSummary } from "../../types";
 import { SettingRow, SettingsHeader, SettingsSection } from "./SettingsPrimitives";
@@ -30,8 +31,7 @@ const SCOPE_LABELS: Record<string, string> = {
 
 export function SkillsSettings() {
   const { state, refetchSkills } = useStore();
-  const [busyPath, setBusyPath] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { isBusy, error, setError, run } = useAsyncAction();
 
   // `skills/list` already runs at startup and whenever the Project set
   // changes, so an empty catalog here is normally genuine rather than "not
@@ -61,9 +61,8 @@ export function SkillsSettings() {
   }, [skills]);
 
   async function toggle(skill: SkillMetadata, enabled: boolean) {
-    setBusyPath(skill.path);
-    setError(null);
-    try {
+    await run(
+      async () => {
       const effective = await api.setSkillEnabled(skill.path, enabled);
       if (effective !== enabled) {
         // The server accepted the write but a higher config layer pins the
@@ -76,11 +75,9 @@ export function SkillsSettings() {
       // Re-list rather than patching local state: the effective value is the
       // server's to decide, and `skills/list` is where it is reported.
       refetchSkills();
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setBusyPath(null);
-    }
+      },
+      { key: skill.path },
+    );
   }
 
   return (
@@ -110,7 +107,7 @@ export function SkillsSettings() {
                   </span>
                 }
                 control={
-                  busyPath === skill.path ? (
+                  isBusy(skill.path) ? (
                     <Loader2 className="size-4 animate-spin text-muted-foreground" />
                   ) : (
                     <Switch

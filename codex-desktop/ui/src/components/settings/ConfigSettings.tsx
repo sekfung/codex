@@ -74,8 +74,10 @@ export function ConfigSettings() {
     }
   }
 
-  /// Deployment requirements can narrow the allowed values; when they do, the
-  /// screen must not offer what the server would reject.
+  /**
+   * Deployment requirements can narrow the allowed values; when they do, the
+   * screen must not offer what the server would reject.
+   */
   function allowed<T extends string>(
     options: SelectOption<T>[],
     permitted: readonly unknown[] | null | undefined,
@@ -261,8 +263,10 @@ export function ConfigSettings() {
   );
 }
 
-/// Efforts are per-model, so offer the selected model's list rather than a
-/// fixed one that might name values the model rejects.
+/**
+ * Efforts are per-model, so offer the selected model's list rather than a
+ * fixed one that might name values the model rejects.
+ */
 function effortOptionsFor(
   models: { model: string; supportedReasoningEfforts: { reasoningEffort: string; description: string }[] }[],
   model: string | null,

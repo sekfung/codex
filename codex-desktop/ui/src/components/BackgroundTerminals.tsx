@@ -5,22 +5,26 @@ import { useStore } from "../store";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
-/// Processes the agent started and left running
-/// (`thread/backgroundTerminals/list`), with terminate and clean.
-///
-/// The TUI exposes only the clean-all half of this capability
-/// (`AppCommand::CleanBackgroundTerminals`); `list` and `terminate` are
-/// implemented server-side but nothing in-tree calls them. Without a list, a
-/// dev server still holding a port after a turn ends is invisible — which is
-/// the reason to surface it at all.
+/**
+ * Processes the agent started and left running
+ * (`thread/backgroundTerminals/list`), with terminate and clean.
+ *
+ * The TUI exposes only the clean-all half of this capability
+ * (`AppCommand::CleanBackgroundTerminals`); `list` and `terminate` are
+ * implemented server-side but nothing in-tree calls them. Without a list, a
+ * dev server still holding a port after a turn ends is invisible — which is
+ * the reason to surface it at all.
+ */
 export function BackgroundTerminals({ threadId }: { threadId: string }) {
   const { state, refetchBackgroundTerminals, terminateBackgroundTerminal, cleanBackgroundTerminals } =
     useStore();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  /// Two-step confirm, matching the sidebar's thread delete: killing someone's
-  /// dev server is not an undoable click.
+  /**
+   * Two-step confirm, matching the sidebar's thread delete: killing someone's
+   * dev server is not an undoable click.
+   */
   const [confirming, setConfirming] = useState<string | null>(null);
 
   const terminals = state.threads[threadId]?.backgroundTerminals ?? [];

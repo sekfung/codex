@@ -4,18 +4,20 @@ import { ChevronDown, ChevronUp, Loader2, Paperclip, Play, X } from "lucide-reac
 import { useStore } from "../store";
 import { Button } from "@/components/ui/button";
 
-/// Submissions waiting behind the running turn (`thread/queue/*`).
-///
-/// This is a *view* of engine state, not a schedule this client executes.
-/// `QueuedItemService` implements `on_thread_idle` and dispatches the head of
-/// the queue itself whenever the thread goes idle for any cause except an
-/// interrupt (`ext/queue/src/service.rs`), so nothing here starts queued work
-/// on turn completion — that would race the engine and could run a submission
-/// twice.
-///
-/// The one exception is the "现在开始" button, which appears only while the
-/// thread is idle. That is exactly the case the engine skips: an interrupted
-/// turn suppresses auto-dispatch, leaving the queue parked until asked for.
+/**
+ * Submissions waiting behind the running turn (`thread/queue/*`).
+ *
+ * This is a *view* of engine state, not a schedule this client executes.
+ * `QueuedItemService` implements `on_thread_idle` and dispatches the head of
+ * the queue itself whenever the thread goes idle for any cause except an
+ * interrupt (`ext/queue/src/service.rs`), so nothing here starts queued work
+ * on turn completion — that would race the engine and could run a submission
+ * twice.
+ *
+ * The one exception is the "现在开始" button, which appears only while the
+ * thread is idle. That is exactly the case the engine skips: an interrupted
+ * turn suppresses auto-dispatch, leaving the queue parked until asked for.
+ */
 export function QueuePanel({ threadId }: { threadId: string }) {
   const { state, refetchQueue, removeQueued, moveQueued, startQueuedNow } = useStore();
   const [busyId, setBusyId] = useState<string | null>(null);

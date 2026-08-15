@@ -1,6 +1,5 @@
-import { useState } from "react";
-
 import { useStore } from "../../store";
+import { useAsyncAction } from "./useAsyncAction";
 import type { ApprovalMode } from "../../types";
 import { ConfigPending, OriginNote, SettingRow, SettingsHeader, SettingsSection } from "./SettingsPrimitives";
 import { Switch } from "@/components/ui/switch";
@@ -25,26 +24,19 @@ const MODE_FOR_TOGGLE: Record<string, ApprovalMode> = {
 
 export function GeneralSettings() {
   const { state, setDefaultApprovalMode } = useStore();
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const { busy, error, run } = useAsyncAction();
 
   const mode = state.defaultApprovalMode;
 
   async function apply(next: ApprovalMode) {
-    setBusy(true);
-    setError(null);
-    try {
-      await setDefaultApprovalMode(next);
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setBusy(false);
-    }
+    await run(() => setDefaultApprovalMode(next));
   }
 
-  /// Turning a level off falls back to the level below it; turning one on
-  /// selects it. `requestApproval` is the floor — there is no "less than
-  /// workspace access" mode in the selector's mapping.
+  /**
+   * Turning a level off falls back to the level below it; turning one on
+   * selects it. `requestApproval` is the floor — there is no "less than
+   * workspace access" mode in the selector's mapping.
+   */
   function toggle(id: keyof typeof MODE_FOR_TOGGLE, checked: boolean) {
     if (checked) return apply(MODE_FOR_TOGGLE[id]);
     if (id === "fullAccess") return apply("helpMeApprove");

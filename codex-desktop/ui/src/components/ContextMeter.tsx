@@ -6,15 +6,17 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 
-/// Context pressure, from `thread/tokenUsage/updated`.
-///
-/// The percentage itself is computed by the engine's own
-/// `percent_of_context_window_remaining` via a Rust command — see
-/// `src/composer.rs` for why it isn't arithmetic here.
-///
-/// Doubles as the entry point for `thread/compact/start`, because running low
-/// on context is exactly when a user reaches for compaction (the TUI pairs
-/// them the same way: `/compact` and the context footer).
+/**
+ * Context pressure, from `thread/tokenUsage/updated`.
+ *
+ * The percentage itself is computed by the engine's own
+ * `percent_of_context_window_remaining` via a Rust command — see
+ * `src/composer.rs` for why it isn't arithmetic here.
+ *
+ * Doubles as the entry point for `thread/compact/start`, because running low
+ * on context is exactly when a user reaches for compaction (the TUI pairs
+ * them the same way: `/compact` and the context footer).
+ */
 export function ContextMeter({ threadId }: { threadId: string }) {
   const { state, compactThread } = useStore();
   const [open, setOpen] = useState(false);

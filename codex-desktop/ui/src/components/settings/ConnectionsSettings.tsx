@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, CheckCircle2, ExternalLink, Loader2, RefreshCw } from "lucide-react";
 
 import { useStore } from "../../store";
+import { useAsyncAction } from "./useAsyncAction";
 import * as api from "../../api";
 import type { McpAuthStatus, McpServerRuntimeState, McpServerStatus } from "../../types";
 import { SettingRow, SettingsHeader, SettingsSection } from "./SettingsPrimitives";
@@ -29,8 +30,7 @@ const AUTH_LABELS: Record<McpAuthStatus, string> = {
 export function ConnectionsSettings() {
   const { state } = useStore();
   const [servers, setServers] = useState<McpServerStatus[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
+  const { busyKey, isBusy, error, setError, run } = useAsyncAction();
 
   const load = useCallback(async () => {
     setError(null);
@@ -48,30 +48,25 @@ export function ConnectionsSettings() {
   }, [load]);
 
   async function reload() {
-    setBusy("__reload__");
-    try {
-      await api.reloadMcpServers();
-      await load();
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setBusy(null);
-    }
+    await run(
+      async () => {
+        await api.reloadMcpServers();
+        await load();
+      },
+      { key: "__reload__" },
+    );
   }
 
   async function login(name: string) {
-    setBusy(name);
-    setError(null);
-    try {
-      const { authorizationUrl } = await api.mcpServerLogin(name);
-      // The RPC only hands back a URL; the browser does the rest, and the
-      // result arrives as `mcpServer/oauthLogin/completed`.
-      await api.openPathInOs(authorizationUrl);
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setBusy(null);
-    }
+    await run(
+      async () => {
+        const { authorizationUrl } = await api.mcpServerLogin(name);
+        // The RPC only hands back a URL; the browser does the rest, and the
+        // result arrives as `mcpServer/oauthLogin/completed`.
+        await api.openPathInOs(authorizationUrl);
+      },
+      { key: name },
+    );
   }
 
   return (
@@ -84,8 +79,8 @@ export function ConnectionsSettings() {
       <SettingsSection
         title="MCP 服务器"
         action={
-          <Button variant="outline" size="xs" onClick={reload} disabled={busy !== null}>
-            {busy === "__reload__" ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+          <Button variant="outline" size="xs" onClick={reload} disabled={busyKey !== null}>
+            {isBusy("__reload__") ? <Loader2 className="animate-spin" /> : <RefreshCw />}
             重新加载
           </Button>
         }
@@ -102,7 +97,7 @@ export function ConnectionsSettings() {
               key={server.name}
               server={server}
               runtime={state.mcpRuntime[server.name]}
-              busy={busy === server.name}
+              busy={isBusy(server.name)}
               onLogin={() => void login(server.name)}
             />
           ))
@@ -160,9 +155,11 @@ function ServerRow({
   );
 }
 
-/// Startup state comes only from `mcpServer/startupStatus/updated`, so before
-/// any notification arrives there is genuinely nothing to report — better to
-/// show nothing than to imply a healthy server.
+/**
+ * Startup state comes only from `mcpServer/startupStatus/updated`, so before
+ * any notification arrives there is genuinely nothing to report — better to
+ * show nothing than to imply a healthy server.
+ */
 function StartupBadge({ runtime }: { runtime: McpServerRuntimeState | undefined }) {
   if (!runtime) return null;
   const { status } = runtime;

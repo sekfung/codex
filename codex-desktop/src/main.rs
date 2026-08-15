@@ -292,6 +292,8 @@ fn main() {
             features::set_feature_enabled,
             git_diff::git_diff,
             git_refs::git_refs,
+            git_diff::git_diff_to_remote,
+            git_diff::branch_status,
             commands::start_thread,
             commands::set_approval_mode,
             commands::thread_settings_indicators,

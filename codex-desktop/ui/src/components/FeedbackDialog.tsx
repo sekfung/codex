@@ -7,16 +7,18 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 
-/// `feedback/upload`.
-///
-/// Lives beside the review launcher in the composer toolbar because feedback
-/// is thread-scoped — `FeedbackUploadParams.thread_id` is the conversation
-/// being reported on, so an entry point that loses the current thread would
-/// have to send `null` and lose the only context that makes a report useful.
-///
-/// The classifications are the engine's own string values, from
-/// `tui/src/bottom_pane/feedback_view.rs::feedback_classification` — not a
-/// vocabulary invented here.
+/**
+ * `feedback/upload`.
+ *
+ * Lives beside the review launcher in the composer toolbar because feedback
+ * is thread-scoped — `FeedbackUploadParams.thread_id` is the conversation
+ * being reported on, so an entry point that loses the current thread would
+ * have to send `null` and lose the only context that makes a report useful.
+ *
+ * The classifications are the engine's own string values, from
+ * `tui/src/bottom_pane/feedback_view.rs::feedback_classification` — not a
+ * vocabulary invented here.
+ */
 const CLASSIFICATIONS: Array<{ value: string; label: string; hint: string }> = [
   { value: "bad_result", label: "结果不好", hint: "Codex 做错了，或做得不够好" },
   { value: "good_result", label: "结果很好", hint: "这次表现值得记录" },
