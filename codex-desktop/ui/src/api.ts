@@ -22,6 +22,7 @@ import type {
   LoginAccountResponse,
   MarketplaceUpgradeResponse,
   McpServerOauthLoginResponse,
+  MemorySettings,
   ModelListResponse,
   PluginListResponse,
   AppsListResponse,
@@ -460,3 +461,24 @@ export const goalSet = (
   });
 
 export const goalClear = (threadId: string) => invoke<unknown>("goal_clear", { threadId });
+
+// -- Memories ----------------------------------------------------------------
+
+export const readMemorySettings = () => invoke<MemorySettings>("read_memory_settings");
+
+/// `generateChanged` mirrors the TUI: the per-thread memory mode is only
+/// pushed when the write-path setting actually changed, because that is the
+/// one that affects the thread already running.
+export const setMemorySettings = (
+  settings: MemorySettings,
+  threadId: string | null,
+  generateChanged: boolean,
+) => invoke<unknown>("set_memory_settings", { settings, threadId, generateChanged });
+
+/// Irreversible and global to this `$CODEX_HOME` — see `src/memories.rs`.
+export const resetMemories = () => invoke<unknown>("reset_memories");
+
+/// `skills/config/write`. Returns the server's `effectiveEnabled`, which can
+/// differ from the requested value when a higher config layer pins the skill.
+export const setSkillEnabled = (path: string, enabled: boolean) =>
+  invoke<boolean>("set_skill_enabled", { path, enabled });

@@ -922,3 +922,20 @@ export type TokenBudgetEdit =
   | { kind: "unchanged" }
   | { kind: "clear" }
   | { kind: "set"; tokens: number };
+
+// -- Memories (`config.toml` + `thread/memoryMode/set` + `memory/reset`) ------
+// The two settings the TUI exposes, out of the many `MemoriesToml` carries —
+// only these two have a user-facing control anywhere in this repo
+// (`tui/src/bottom_pane/memories_settings_view.rs`). Read and written in Rust
+// (`src/memories.rs`): `memories` is not a named field on `v2::Config`, so it
+// arrives in the flattened map with snake_case children among camelCase
+// siblings.
+
+export interface MemorySettings {
+  /// Read path. The TUI's own wording is "Applied at next thread" — it does
+  /// not change the running one.
+  useMemories: boolean;
+  /// Write path. Applies to the current thread too, which is exactly why
+  /// `thread/memoryMode/set` exists.
+  generateMemories: boolean;
+}

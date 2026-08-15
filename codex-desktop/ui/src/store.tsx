@@ -204,9 +204,14 @@ interface State {
   mcpRuntime: Record<string, McpServerRuntimeState>;
   /// In-flight ChatGPT sign-in. Cleared by `account/login/completed`.
   pendingLogin: PendingLogin | null;
-  /// Skills available for `$name` mentions, from `skills/list` across the open
-  /// Projects. Refreshed on `skills/changed`. Empty is a legitimate state
-  /// (no skills installed), so the typeahead simply finds nothing.
+  /// Every skill `skills/list` reports across the open Projects, **including
+  /// disabled ones**, refreshed on `skills/changed`. Empty is a legitimate
+  /// state (no skills installed).
+  ///
+  /// Deliberately unfiltered: the `$` typeahead wants only enabled skills and
+  /// filters at the point of use, but the settings screen has to show disabled
+  /// ones or they could never be switched back on. Filtering here instead
+  /// would make one consumer's needs quietly break the other's.
   skills: SkillMetadata[];
   /// Connectors available for `@` mentions, from `app/list`, refreshed on
   /// `app/list/updated`. Only accessible+enabled entries are mentionable —
@@ -1002,7 +1007,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         const byPath = new Map<string, SkillMetadata>();
         for (const entry of response.data ?? []) {
           for (const skill of entry.skills ?? []) {
-            if (skill.enabled !== false) byPath.set(skill.path, skill);
+            // Disabled skills are kept: the settings screen needs them to
+            // offer re-enabling. The typeahead filters them out itself.
+            byPath.set(skill.path, skill);
           }
         }
         dispatch({ type: "SKILLS_LOADED", skills: [...byPath.values()] });

@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   Download,
   Blocks,
+  Brain,
   CreditCard,
   GitBranch,
   Keyboard,
@@ -11,6 +12,7 @@ import {
   Search,
   Settings2,
   Sliders,
+  Sparkles,
   Terminal,
   User,
   Webhook,
@@ -24,7 +26,9 @@ import { ImportSettings } from "./ImportSettings";
 import { AccountSettings } from "./AccountSettings";
 import { ConnectionsSettings } from "./ConnectionsSettings";
 import { HooksSettings } from "./HooksSettings";
+import { MemoriesSettings } from "./MemoriesSettings";
 import { PluginsSettings } from "./PluginsSettings";
+import { SkillsSettings } from "./SkillsSettings";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -55,6 +59,7 @@ const NAV_GROUPS: NavGroup[] = [
       { id: "import", label: "导入", Icon: Download, ready: true },
       { id: "appearance", label: "外观", Icon: Palette, ready: true },
       { id: "config", label: "配置", Icon: Sliders, ready: true },
+      { id: "memories", label: "记忆", Icon: Brain, ready: true },
       { id: "keyboard", label: "键盘快捷键", Icon: Keyboard },
       { id: "usage", label: "使用情况和计费", Icon: CreditCard },
       { id: "account", label: "账户", Icon: User, ready: true },
@@ -70,6 +75,10 @@ const NAV_GROUPS: NavGroup[] = [
   {
     label: "编码",
     items: [
+      // 技能's placement here is our choice, not copied — the reference
+      // screenshots' nav is cut off below 环境, so they never show whether the
+      // Official App has a Skills entry at all. See SkillsSettings.tsx.
+      { id: "skills", label: "技能", Icon: Sparkles, ready: true },
       { id: "hooks", label: "钩子", Icon: Webhook, ready: true },
       { id: "git", label: "Git", Icon: GitBranch },
       { id: "environment", label: "环境", Icon: Terminal },
@@ -167,6 +176,8 @@ export function SettingsShell() {
           {active === "plugins" && <PluginsSettings />}
           {active === "connections" && <ConnectionsSettings />}
           {active === "hooks" && <HooksSettings />}
+          {active === "memories" && <MemoriesSettings />}
+          {active === "skills" && <SkillsSettings />}
         </div>
       </main>
     </div>

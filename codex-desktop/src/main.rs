@@ -14,6 +14,7 @@ mod commands;
 mod composer;
 mod config_settings;
 mod integrations;
+mod memories;
 mod projects;
 mod thread_ops;
 mod user_input;
@@ -274,6 +275,10 @@ fn main() {
             config_settings::set_default_approval_mode,
             config_settings::config_file_path,
             config_settings::open_path_in_os,
+            memories::read_memory_settings,
+            memories::set_memory_settings,
+            memories::reset_memories,
+            memories::set_skill_enabled,
             integrations::list_mcp_servers,
             integrations::mcp_server_login,
             integrations::reload_mcp_servers,

@@ -121,10 +121,15 @@ pub async fn write_config_batch(
     bridge: State<'_, AppServerBridge>,
     edits: Vec<SettingEdit>,
 ) -> CmdResult<JsonValue> {
-    write_batch(&bridge, edits.into_iter().map(Into::into).collect()).await
+    write_config_edits(&bridge, edits.into_iter().map(Into::into).collect()).await
 }
 
-async fn write_batch(bridge: &AppServerBridge, edits: Vec<ConfigEdit>) -> CmdResult<JsonValue> {
+/// Shared by the settings commands here and in `memories.rs`, so every
+/// multi-key control writes through one path with the same reload semantics.
+pub(crate) async fn write_config_edits(
+    bridge: &AppServerBridge,
+    edits: Vec<ConfigEdit>,
+) -> CmdResult<JsonValue> {
     bridge
         .request(ClientRequest::ConfigBatchWrite {
             request_id: bridge.next_request_id(),
@@ -181,7 +186,7 @@ pub async fn set_default_approval_mode(
             merge_strategy: MergeStrategy::Replace,
         },
     ];
-    write_batch(&bridge, edits).await
+    write_config_edits(&bridge, edits).await
 }
 
 /// The persisted default approval mode, or `null` when `config.toml` holds a

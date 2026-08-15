@@ -235,7 +235,9 @@ export function Composer({ threadId }: { threadId: string }) {
     if (!skillQuery) return [];
     const needle = skillQuery.query.toLowerCase();
     return state.skills
-      .filter((skill) => skill.name.toLowerCase().includes(needle))
+      // `state.skills` is the full catalog so the settings screen can offer
+      // re-enabling; a disabled skill must not be mentionable here.
+      .filter((skill) => skill.enabled !== false && skill.name.toLowerCase().includes(needle))
       .slice(0, 8);
   }, [skillQuery, state.skills]);
 
