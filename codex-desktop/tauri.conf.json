@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Codex",
+  "productName": "Codex Desktop",
   "version": "0.0.0",
   "identifier": "com.sekfung.codex-desktop",
   "build": {

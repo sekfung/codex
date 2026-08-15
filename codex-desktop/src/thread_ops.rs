@@ -92,9 +92,17 @@ fn queued_submission_view(submission: QueuedSubmission) -> QueuedSubmissionView 
                 }
                 text.push_str(&value);
             }
-            UserInput::Image { .. } | UserInput::LocalImage { .. } => attachment_count += 1,
+            UserInput::Image { .. }
+            | UserInput::LocalImage { .. }
+            | UserInput::Audio { .. }
+            | UserInput::LocalAudio { .. } => attachment_count += 1,
             UserInput::Skill { name, .. } => skill_names.push(name),
-            _ => {}
+            // Nothing to add: a mention leaves its `@token` in the `Text` item
+            // it accompanies (see `composer.rs`), so it is already visible in
+            // `text`. Counting it as an attachment would be wrong, and naming
+            // it separately would double-count. If the UI ever wants mention
+            // chips the way it has skill chips, this is where they come from.
+            UserInput::Mention { .. } => {}
         }
     }
 
@@ -520,6 +528,45 @@ mod tests {
                 text: "run $review on this".to_string(),
                 attachment_count: 1,
                 skill_names: vec!["review".to_string()],
+            }
+        );
+    }
+
+    /// This client's composer offers only images, so audio and mentions reach
+    /// the queue from *another* client sharing `$CODEX_HOME` — which is
+    /// exactly why the summary must not drop them. Audio is an attachment;
+    /// a mention already rides in the accompanying text as its `@token`, so
+    /// it must not be counted again.
+    #[test]
+    fn queued_submission_view_counts_audio_and_leaves_mentions_to_the_text() {
+        let view = queued_submission_view(QueuedSubmission {
+            id: "q2".to_string(),
+            client_user_message_id: "c2".to_string(),
+            input: vec![
+                UserInput::Text {
+                    text: "ask @Docs about this".to_string(),
+                    text_elements: Vec::new(),
+                },
+                UserInput::Audio {
+                    url: "https://example.invalid/a.wav".to_string(),
+                },
+                UserInput::LocalAudio {
+                    path: PathBuf::from("/tmp/b.wav"),
+                },
+                UserInput::Mention {
+                    name: "Docs".to_string(),
+                    path: "app://docs".to_string(),
+                },
+            ],
+        });
+
+        assert_eq!(
+            view,
+            QueuedSubmissionView {
+                id: "q2".to_string(),
+                text: "ask @Docs about this".to_string(),
+                attachment_count: 2,
+                skill_names: Vec::new(),
             }
         );
     }
