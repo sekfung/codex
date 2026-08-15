@@ -5,6 +5,7 @@ import {
   Blocks,
   Brain,
   CreditCard,
+  FlaskConical,
   GitBranch,
   Keyboard,
   Palette,
@@ -29,6 +30,7 @@ import { HooksSettings } from "./HooksSettings";
 import { MemoriesSettings } from "./MemoriesSettings";
 import { PluginsSettings } from "./PluginsSettings";
 import { SkillsSettings } from "./SkillsSettings";
+import { ExperimentalSettings } from "./ExperimentalSettings";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -80,6 +82,9 @@ const NAV_GROUPS: NavGroup[] = [
       // Official App has a Skills entry at all. See SkillsSettings.tsx.
       { id: "skills", label: "技能", Icon: Sparkles, ready: true },
       { id: "hooks", label: "钩子", Icon: Webhook, ready: true },
+      // Also our placement: `/experimental` is a TUI command with no nav
+      // counterpart in the screenshots. See ExperimentalSettings.tsx.
+      { id: "experimental", label: "实验性功能", Icon: FlaskConical, ready: true },
       { id: "git", label: "Git", Icon: GitBranch },
       { id: "environment", label: "环境", Icon: Terminal },
     ],
@@ -178,6 +183,7 @@ export function SettingsShell() {
           {active === "hooks" && <HooksSettings />}
           {active === "memories" && <MemoriesSettings />}
           {active === "skills" && <SkillsSettings />}
+          {active === "experimental" && <ExperimentalSettings />}
         </div>
       </main>
     </div>

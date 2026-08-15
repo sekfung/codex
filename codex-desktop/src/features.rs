@@ -12,8 +12,10 @@
 //! exists to prevent.
 
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::ConfigEdit;
 use codex_app_server_protocol::ExperimentalFeatureListParams;
 use codex_app_server_protocol::ExperimentalFeatureListResponse;
+use codex_app_server_protocol::MergeStrategy;
 use serde::Serialize;
 use tauri::State;
 
@@ -82,6 +84,49 @@ pub async fn list_features(bridge: State<'_, AppServerBridge>) -> Result<Vec<Fea
     }
 }
 
+/// Enables or disables one feature flag, persisting to `config.toml`.
+///
+/// Deliberately **not** `experimentalFeature/enablement/set`. That RPC applies
+/// "process-wide runtime" enablement which is lost on restart, it accepts only
+/// a seven-key allowlist in `config_processor.rs`
+/// (`SUPPORTED_EXPERIMENTAL_FEATURE_ENABLEMENT`) that contains no beta-stage
+/// feature, and no in-tree client calls it. The TUI persists through
+/// `config/batchWrite` instead (`config_persistence.rs::update_feature_flags`),
+/// which is also what ADR-0020 requires of a behavior setting.
+#[tauri::command]
+pub async fn set_feature_enabled(
+    bridge: State<'_, AppServerBridge>,
+    name: String,
+    enabled: bool,
+) -> Result<serde_json::Value, String> {
+    let edit = feature_enabled_edit(&name, enabled)?;
+    crate::config_settings::write_config_edits(bridge.inner(), vec![edit]).await
+}
+
+/// Builds the config edit for a feature toggle, mirroring the TUI's
+/// `config_update::build_feature_enabled_edit`.
+///
+/// The nuance worth preserving: turning *off* a feature that is already off by
+/// default clears the key rather than writing `false`, so `config.toml` does
+/// not accumulate entries that restate the default.
+fn feature_enabled_edit(name: &str, enabled: bool) -> Result<ConfigEdit, String> {
+    let feature = codex_features::feature_for_key(name)
+        .ok_or_else(|| format!("unknown feature flag `{name}`"))?;
+    let default_enabled = feature.default_enabled();
+    let key_path = format!("features.{name}");
+    let value = if enabled || default_enabled {
+        serde_json::json!(enabled)
+    } else {
+        // `Replace` with null is how this codebase clears a key.
+        serde_json::Value::Null
+    };
+    Ok(ConfigEdit {
+        key_path,
+        value,
+        merge_strategy: MergeStrategy::Replace,
+    })
+}
+
 /// Lowercases the stage for the frontend.
 ///
 /// Mapped here rather than derived in TypeScript so the wire representation
@@ -94,5 +139,46 @@ fn stage_name(stage: &codex_app_server_protocol::ExperimentalFeatureStage) -> &'
         Stage::Stable => "stable",
         Stage::Deprecated => "deprecated",
         Stage::Removed => "removed",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    /// `network_proxy` is the one beta-stage flag in the engine's table and is
+    /// off by default, so switching it off must *clear* the key rather than
+    /// write `false` — matching `build_feature_enabled_edit` in the TUI, which
+    /// keeps `config.toml` free of entries that merely restate a default.
+    #[test]
+    fn disabling_a_default_off_feature_clears_the_key() {
+        let edit = feature_enabled_edit("network_proxy", /*enabled*/ false)
+            .expect("network_proxy is a known feature");
+        assert_eq!(edit.key_path, "features.network_proxy");
+        assert_eq!(edit.value, serde_json::Value::Null);
+    }
+
+    #[test]
+    fn enabling_writes_true() {
+        let edit = feature_enabled_edit("network_proxy", /*enabled*/ true)
+            .expect("network_proxy is a known feature");
+        assert_eq!(edit.value, serde_json::json!(true));
+    }
+
+    /// A default-*on* feature writes `false` explicitly: clearing it would
+    /// restore the default, which is the opposite of what was asked.
+    #[test]
+    fn disabling_a_default_on_feature_writes_false() {
+        let edit = feature_enabled_edit("enable_request_compression", /*enabled*/ false)
+            .expect("enable_request_compression is a known feature");
+        assert_eq!(edit.value, serde_json::json!(false));
+    }
+
+    /// An unknown key must fail rather than write `features.<typo>`, which
+    /// config validation would reject anyway but less legibly.
+    #[test]
+    fn unknown_feature_is_rejected() {
+        assert!(feature_enabled_edit("not_a_real_feature", true).is_err());
     }
 }

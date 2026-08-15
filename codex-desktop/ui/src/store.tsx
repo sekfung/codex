@@ -919,6 +919,7 @@ interface StoreValue {
     delivery: ReviewDelivery,
   ) => Promise<void>;
   refetchSkills: () => void;
+  refetchFeatures: () => void;
   forkThreadFromTurn: (threadId: string, turnId: string) => Promise<void>;
   /// Queue (`thread/queue/*`). `queueMessage` is what the composer calls while
   /// a turn is running; the engine dispatches queued work itself when the turn
@@ -1144,6 +1145,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         dispatch({ type: "SKILLS_LOADED", skills: [...byPath.values()] });
       })
       .catch((error) => tracingWarn(`skills/list failed: ${String(error)}`));
+  }, []);
+
+  /// Re-reads the feature table after a toggle.
+  ///
+  /// The write is a config edit, and a higher config layer can pin a flag, so
+  /// the effective value is the server's to report rather than ours to assume.
+  const refetchFeatures = useCallback(() => {
+    api
+      .listFeatures()
+      .then((features) => dispatch({ type: "FEATURES_LOADED", features }))
+      .catch((error) => tracingWarn(`experimentalFeature/list failed: ${String(error)}`));
   }, []);
 
   /// `app/list` for the `@` menu's 插件 section.
@@ -1848,6 +1860,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       compactThread,
       startReview,
       refetchSkills,
+      refetchFeatures,
       forkThreadFromTurn,
       queueMessage,
       refetchQueue,
@@ -1896,6 +1909,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       compactThread,
       startReview,
       refetchSkills,
+      refetchFeatures,
       forkThreadFromTurn,
       queueMessage,
       refetchQueue,

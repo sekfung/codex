@@ -27,6 +27,10 @@ codex-arg0 = { workspace = true }
 codex-config = { workspace = true }
 codex-core = { workspace = true }
 codex-exec-server = { workspace = true }
+# The engine's own feature table. Used to read a flag's `default_enabled` when
+# building a config edit, so the "clear vs. write false" rule matches the TUI
+# instead of trusting a value round-tripped through the frontend.
+codex-features = { workspace = true }
 codex-utils-approval-presets = { workspace = true }
 codex-feedback = { workspace = true }
 # Owns the fsmonitor probe policy shared with the TUI's `/diff`; command

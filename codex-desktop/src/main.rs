@@ -299,6 +299,7 @@ fn main() {
             commands::set_model,
             commands::set_personality,
             features::list_features,
+            features::set_feature_enabled,
             git_diff::git_diff,
             commands::start_thread,
             commands::set_approval_mode,

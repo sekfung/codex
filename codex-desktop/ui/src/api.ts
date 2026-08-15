@@ -154,6 +154,13 @@ export const setPersonality = (threadId: string, personality: Personality) =>
 /// deployment may have turned off, rather than assuming they are available.
 export const listFeatures = () => invoke<FeatureFlag[]>("list_features");
 
+/// Persists a feature flag to `config.toml` via `config/batchWrite`, the same
+/// path the TUI uses. Not `experimentalFeature/enablement/set`, which is
+/// runtime-only and whose allowlist excludes every beta-stage flag — see the
+/// note on `set_feature_enabled` in `src/features.rs`.
+export const setFeatureEnabled = (name: string, enabled: boolean) =>
+  invoke<unknown>("set_feature_enabled", { name, enabled });
+
 /// `/diff` — the working-tree diff, run through `command/exec` so it obeys the
 /// session's sandbox policy (never spawned locally; ADR-0021).
 export const gitDiff = (cwd: string) => invoke<GitDiffResult>("git_diff", { cwd });
