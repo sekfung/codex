@@ -12,6 +12,7 @@ use codex_thread_store::ThreadSortKey;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
+use codex_vcs_utils::VcsKindLabels as _;
 use dirs::home_dir;
 use std::cmp::Reverse;
 use std::collections::HashMap;

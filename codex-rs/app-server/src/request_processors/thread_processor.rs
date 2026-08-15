@@ -1788,6 +1788,12 @@ impl ThreadRequestProcessor {
                             origin_url,
                             "gitInfo.originUrl",
                         )?,
+                        // No-op rather than a value: this RPC lets a client
+                        // correct the sha, branch or URL it already knows
+                        // about, not declare that the thread changed version
+                        // control system. Leaving it unset preserves whatever
+                        // was recorded when the thread was created.
+                        vcs: None,
                     })
                 },
             )

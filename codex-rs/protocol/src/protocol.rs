@@ -3129,15 +3129,51 @@ impl Mul<f64> for TruncationPolicy {
     }
 }
 
+/// Which version control system a [`GitInfo`] record describes.
+///
+/// Lives here rather than in `codex-vcs-utils` because this is a persisted
+/// discriminator: it is written into rollout files and thread metadata, and read
+/// back by builds older or newer than the writer. `codex-vcs-utils` re-exports
+/// it, and cannot own it — it depends on `codex-git-utils`, which depends on
+/// this crate.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum VcsKind {
+    /// The default on read, which is what makes this field free to add: every
+    /// record written before Subversion was supported came from a git-only
+    /// build, so an absent discriminator genuinely means git rather than
+    /// "unknown".
+    #[default]
+    Git,
+    Subversion,
+}
+
+impl VcsKind {
+    /// Used to omit the discriminator for git, so records for git repositories
+    /// are byte-identical to those written before this field existed.
+    pub fn is_git(&self) -> bool {
+        matches!(self, VcsKind::Git)
+    }
+}
+
+/// What a checkout currently has. Despite the name — kept for compatibility with
+/// every record already on disk — this describes either system, and `vcs` says
+/// which. The three value fields are reused rather than duplicated per system,
+/// so a reader consults one field and interprets it by `vcs`.
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
 pub struct GitInfo {
-    /// Current commit hash (SHA)
+    /// Which system the remaining fields describe. Omitted for git.
+    #[serde(default, skip_serializing_if = "VcsKind::is_git")]
+    pub vcs: VcsKind,
+    /// Git: commit hash (SHA). Subversion: revision, which may be a `123:456`
+    /// range for a mixed-revision working copy.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub commit_hash: Option<GitSha>,
-    /// Current branch name
+    /// Git: branch name. Subversion: repository-relative path (`trunk`,
+    /// `branches/feature-x`) — a path, not a ref.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
-    /// Repository URL (if available from remote)
+    /// Git: repository URL from the remote. Subversion: repository root URL.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repository_url: Option<String>,
 }

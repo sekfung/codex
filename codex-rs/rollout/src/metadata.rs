@@ -59,6 +59,9 @@ pub(crate) fn builder_from_session_meta(
         builder.git_sha = git.commit_hash.as_ref().map(|sha| sha.0.clone());
         builder.git_branch = git.branch.clone();
         builder.git_origin_url = git.repository_url.clone();
+        builder.git_vcs = serde_json::to_value(git.vcs)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_string));
     }
     Some(builder)
 }

@@ -4234,6 +4234,7 @@ dependencies = [
  "codex-state",
  "codex-utils-absolute-path",
  "codex-utils-path",
+ "codex-vcs-utils",
  "pretty_assertions",
  "regex",
  "serde",
@@ -4480,6 +4481,7 @@ dependencies = [
  "codex-utils-absolute-path",
  "codex-utils-path",
  "codex-utils-path-uri",
+ "codex-vcs-utils",
  "futures",
  "pretty_assertions",
  "pulldown-cmark",
@@ -4899,6 +4901,7 @@ version = "0.0.0"
 dependencies = [
  "codex-file-system",
  "codex-git-utils",
+ "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-path-uri",
  "pretty_assertions",

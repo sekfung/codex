@@ -67,6 +67,8 @@ pub struct ThreadItem {
     pub git_sha: Option<String>,
     /// Git origin URL from session metadata.
     pub git_origin_url: Option<String>,
+    /// Serialized `VcsKind`; `None` for rows written before Subversion support.
+    pub git_vcs: Option<String>,
     /// Session source from session metadata.
     pub source: Option<SessionSource>,
     /// Persisted thread history contract selected when this thread was created.
@@ -107,6 +109,7 @@ struct HeadTailSummary {
     git_branch: Option<String>,
     git_sha: Option<String>,
     git_origin_url: Option<String>,
+    git_vcs: Option<String>,
     source: Option<SessionSource>,
     history_mode: ThreadHistoryMode,
     parent_thread_id: Option<ThreadId>,
@@ -815,6 +818,7 @@ async fn build_thread_item(
             git_branch,
             git_sha,
             git_origin_url,
+            git_vcs,
             source,
             history_mode,
             parent_thread_id,
@@ -839,6 +843,7 @@ async fn build_thread_item(
             git_branch,
             git_sha,
             git_origin_url,
+            git_vcs,
             source,
             history_mode,
             parent_thread_id,

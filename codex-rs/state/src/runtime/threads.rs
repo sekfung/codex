@@ -48,7 +48,8 @@ SELECT
     threads.section_entered_at_ms,
     threads.git_sha,
     threads.git_branch,
-    threads.git_origin_url
+    threads.git_origin_url,
+    threads.git_vcs
 FROM threads
 WHERE threads.id = ?
             "#,
@@ -620,8 +621,9 @@ INSERT INTO threads (
     git_sha,
     git_branch,
     git_origin_url,
+    git_vcs,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO NOTHING
             "#,
         )
@@ -669,6 +671,7 @@ ON CONFLICT(id) DO NOTHING
         .bind(metadata.git_sha.as_deref())
         .bind(metadata.git_branch.as_deref())
         .bind(metadata.git_origin_url.as_deref())
+        .bind(metadata.git_vcs.as_deref())
         .bind("enabled")
         .execute(self.pool.as_ref())
         .await?;
@@ -824,6 +827,7 @@ impl StateRuntime {
         git_sha: Option<Option<&str>>,
         git_branch: Option<Option<&str>>,
         git_origin_url: Option<Option<&str>>,
+        git_vcs: Option<Option<&str>>,
     ) -> anyhow::Result<bool> {
         let result = sqlx::query(
             r#"
@@ -831,7 +835,8 @@ UPDATE threads
 SET
     git_sha = CASE WHEN ? THEN ? ELSE git_sha END,
     git_branch = CASE WHEN ? THEN ? ELSE git_branch END,
-    git_origin_url = CASE WHEN ? THEN ? ELSE git_origin_url END
+    git_origin_url = CASE WHEN ? THEN ? ELSE git_origin_url END,
+    git_vcs = CASE WHEN ? THEN ? ELSE git_vcs END
 WHERE id = ?
             "#,
         )
@@ -841,6 +846,8 @@ WHERE id = ?
         .bind(git_branch.flatten())
         .bind(git_origin_url.is_some())
         .bind(git_origin_url.flatten())
+        .bind(git_vcs.is_some())
+        .bind(git_vcs.flatten())
         .bind(thread_id.to_string())
         .execute(self.pool.as_ref())
         .await?;
@@ -895,8 +902,9 @@ INSERT INTO threads (
     git_sha,
     git_branch,
     git_origin_url,
+    git_vcs,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     rollout_path = excluded.rollout_path,
     created_at = excluded.created_at,
@@ -930,7 +938,8 @@ ON CONFLICT(id) DO UPDATE SET
     archived_at = excluded.archived_at,
     git_sha = COALESCE(threads.git_sha, excluded.git_sha),
     git_branch = COALESCE(threads.git_branch, excluded.git_branch),
-    git_origin_url = COALESCE(threads.git_origin_url, excluded.git_origin_url)
+    git_origin_url = COALESCE(threads.git_origin_url, excluded.git_origin_url),
+    git_vcs = COALESCE(threads.git_vcs, excluded.git_vcs)
             "#,
         )
         .bind(metadata.id.to_string())
@@ -977,6 +986,7 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(metadata.git_sha.as_deref())
         .bind(metadata.git_branch.as_deref())
         .bind(metadata.git_origin_url.as_deref())
+        .bind(metadata.git_vcs.as_deref())
         .bind(creation_memory_mode.unwrap_or("enabled"))
         .execute(self.pool.as_ref())
         .await?;
@@ -1279,7 +1289,8 @@ SELECT
     threads.section_entered_at_ms,
     threads.git_sha,
     threads.git_branch,
-    threads.git_origin_url
+    threads.git_origin_url,
+    threads.git_vcs
 "#,
     );
 }
@@ -2606,6 +2617,7 @@ mod tests {
                 context_window: None,
             },
             git: Some(GitInfo {
+                vcs: Default::default(),
                 commit_hash: Some(codex_git_utils::GitSha::new("rollout-sha")),
                 branch: Some("rollout-branch".to_string()),
                 repository_url: Some("git@example.com:openai/codex.git".to_string()),
@@ -2797,6 +2809,7 @@ mod tests {
                 Some(Some("abc123")),
                 Some(Some("feature/branch")),
                 Some(Some("git@example.com:openai/codex.git")),
+                Some(Some("git")),
             )
             .await
             .expect("git info update should succeed");
@@ -2895,7 +2908,7 @@ mod tests {
             .expect("initial upsert should succeed");
 
         let updated = runtime
-            .update_thread_git_info(thread_id, Some(None), Some(None), Some(None))
+            .update_thread_git_info(thread_id, Some(None), Some(None), Some(None), Some(None))
             .await
             .expect("git info clear should succeed");
         assert!(updated, "git info clear should touch the thread row");

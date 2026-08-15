@@ -1116,6 +1116,9 @@ fn git_info_from_patch(patch: &ThreadMetadataPatch) -> Option<codex_protocol::pr
         return None;
     }
     Some(codex_protocol::protocol::GitInfo {
+        // The patch always carries a discriminator once observed; an older
+        // patch that predates it resolves to git, which is what it was.
+        vcs: git_info.vcs.flatten().unwrap_or_default(),
         commit_hash: sha.as_deref().map(codex_git_utils::GitSha::new),
         branch,
         repository_url: origin_url,

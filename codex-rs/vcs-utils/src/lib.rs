@@ -20,42 +20,38 @@ use codex_git_utils::collect_git_info;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
-use serde::Deserialize;
-use serde::Serialize;
 
 pub use svn::SvnInfo;
 pub use svn::collect_svn_info;
 
 /// Which version control system claimed a directory.
 ///
-/// Serialized form matters: this is persisted in thread metadata and rollout
-/// files, and read back by builds that may be older or newer than the writer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum VcsKind {
-    /// The default on read, which is the property that makes this field free to
-    /// add: every record written before Subversion was supported came from a
-    /// git-only build, so an absent discriminator genuinely means git rather
-    /// than "unknown".
-    #[default]
-    Git,
-    Subversion,
+/// Defined in `codex-protocol` because it is a persisted discriminator written
+/// into rollout files and thread metadata; re-exported here so callers of this
+/// crate have one import.
+pub use codex_protocol::protocol::VcsKind;
+
+/// Presentation helpers for [`VcsKind`]. These are this crate's concern rather
+/// than the protocol's — the protocol defines what is stored, not how it reads.
+pub trait VcsKindLabels {
+    /// How to name this when heading a group of threads.
+    fn label(self) -> &'static str;
+    /// Qualifier for the "<X> root:" / "<X> project:" context lines.
+    ///
+    /// Git keeps the exact wording it had before Subversion was supported, so
+    /// the prompt a git user's model sees is unchanged.
+    fn short_name(self) -> &'static str;
 }
 
-impl VcsKind {
-    /// How to name this when heading a group of threads.
-    pub fn label(self) -> &'static str {
+impl VcsKindLabels for VcsKind {
+    fn label(self) -> &'static str {
         match self {
             VcsKind::Git => "Git repo",
             VcsKind::Subversion => "SVN working copy",
         }
     }
 
-    /// Qualifier for the "<X> root:" / "<X> project:" context lines.
-    ///
-    /// Git keeps the exact wording it had before Subversion was supported, so
-    /// the prompt a git user's model sees is unchanged.
-    pub fn short_name(self) -> &'static str {
+    fn short_name(self) -> &'static str {
         match self {
             VcsKind::Git => "Git",
             VcsKind::Subversion => "SVN",
