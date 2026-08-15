@@ -24,8 +24,7 @@ use serde_json::Value as JsonValue;
 use tauri::State;
 
 use crate::bridge::AppServerBridge;
-
-type CmdResult<T> = Result<T, String>;
+use crate::cmd::CmdResult;
 
 // --- MCP servers (连接) -----------------------------------------------------
 

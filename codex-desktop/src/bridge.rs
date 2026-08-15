@@ -15,6 +15,7 @@
 //! `client.request(..)` call onto its own detached task via `Arc<..>` +
 //! `tokio::sync::Mutex`, or give the client a cheap `Clone`.
 
+use serde::de::DeserializeOwned;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 
@@ -114,6 +115,26 @@ impl AppServerBridge {
         response
             .await
             .map_err(|_| "app-server bridge dropped the response channel".to_string())?
+    }
+
+    /// Sends a request and deserialises the successful response into `T`.
+    ///
+    /// Orthogonal to [`request_detailed`](Self::request_detailed): that one is
+    /// about preserving the *error*, this one is about typing the *success*
+    /// payload, so it composes with [`request`](Self::request) rather than
+    /// competing with it.
+    ///
+    /// The label in the decode error comes from the request itself rather than
+    /// from a caller-supplied string, so it cannot drift from the method
+    /// actually sent — which is the failure mode of the hand-written
+    /// `from_value(..).map_err(|e| format!("some/method: {e}"))` this replaces.
+    pub async fn request_as<T: DeserializeOwned>(
+        &self,
+        request: ClientRequest,
+    ) -> Result<T, String> {
+        let method = request.method_name();
+        let response = self.request(request).await?;
+        serde_json::from_value(response).map_err(|err| format!("{method}: {err}"))
     }
 
     /// Like [`request`](Self::request) but keeps the JSON-RPC error intact.

@@ -10,15 +10,18 @@
 
 mod approval_mode;
 mod bridge;
+mod cmd;
 mod commands;
 mod composer;
 mod config_settings;
 mod elicitation;
 mod features;
 mod git_diff;
+mod git_refs;
 mod history_mode;
 mod integrations;
 mod memories;
+mod mention_naming;
 mod projects;
 mod server_requests;
 mod thread_ops;
@@ -212,21 +215,8 @@ async fn startup_failure(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::StartupStatus;
-    use pretty_assertions::assert_eq;
-
-    /// The frontend blocks the whole app on this being `Some`, so inverting it
-    /// would either hide a dead engine or refuse to start a healthy one.
-    #[test]
-    fn startup_failure_is_reported_only_when_startup_failed() {
-        assert_eq!(StartupStatus::Ready.failure(), None);
-        assert_eq!(
-            StartupStatus::Failed("boom".to_string()).failure(),
-            Some("boom".to_string())
-        );
-    }
-}
+#[path = "main_tests.rs"]
+mod tests;
 
 fn main() {
     tracing_subscriber::fmt::init();
@@ -301,6 +291,7 @@ fn main() {
             features::list_features,
             features::set_feature_enabled,
             git_diff::git_diff,
+            git_refs::git_refs,
             commands::start_thread,
             commands::set_approval_mode,
             commands::thread_settings_indicators,

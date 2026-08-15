@@ -29,8 +29,7 @@ use tauri::State;
 
 use crate::approval_mode::ApprovalMode;
 use crate::bridge::AppServerBridge;
-
-type CmdResult<T> = Result<T, String>;
+use crate::cmd::CmdResult;
 
 /// One `config.toml` edit as requested by the settings UI.
 ///

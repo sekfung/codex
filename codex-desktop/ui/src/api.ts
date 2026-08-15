@@ -17,6 +17,7 @@ import type {
   FileSearchHit,
   GetAccountRateLimitsResponse,
   GitDiffResult,
+  GitRefs,
   GetAccountResponse,
   GetAccountTokenUsageResponse,
   HooksListResponse,
@@ -164,6 +165,12 @@ export const setFeatureEnabled = (name: string, enabled: boolean) =>
 /// `/diff` — the working-tree diff, run through `command/exec` so it obeys the
 /// session's sandbox policy (never spawned locally; ADR-0021).
 export const gitDiff = (cwd: string) => invoke<GitDiffResult>("git_diff", { cwd });
+
+/// Branch and commit candidates for the review picker. Unlike `gitDiff` this
+/// reuses `codex_git_utils` directly rather than `command/exec` — no command is
+/// constructed here, so there is nothing to route through the sandbox; see the
+/// module docs in `src/git_refs.rs`.
+export const gitRefs = (cwd: string) => invoke<GitRefs>("git_refs", { cwd });
 
 // -- Settings / config.toml (ADR-0020) ---------------------------------------
 // Behavior settings live in `config.toml` so the CLI honors them too; desktop

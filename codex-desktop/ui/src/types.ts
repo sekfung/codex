@@ -290,6 +290,25 @@ export interface GitDiffResult {
   diff: string;
 }
 
+/// One candidate in the review commit picker. `timestampSeconds` is named for
+/// its unit on purpose — the Rust side re-shapes `CommitLogEntry`'s bare
+/// `timestamp` so the seconds-vs-milliseconds mistake cannot be made here.
+export interface GitCommitOption {
+  sha: string;
+  timestampSeconds: number;
+  subject: string;
+}
+
+/// Candidates for `review/start`'s target picker. As with `GitDiffResult`,
+/// `isGitRepo: false` means "not a repository" — the branch and commit targets
+/// are hidden entirely rather than offered empty.
+export interface GitRefs {
+  isGitRepo: boolean;
+  branches: string[];
+  currentBranch?: string | null;
+  commits: GitCommitOption[];
+}
+
 export interface ModelListResponse {
   data: Model[];
   nextCursor?: string | null;

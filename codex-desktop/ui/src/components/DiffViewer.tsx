@@ -3,7 +3,8 @@ import { GitCompare, Loader2, RefreshCw } from "lucide-react";
 
 import { useStore } from "../store";
 import * as api from "../api";
-import type { GitDiffResult, ThreadSummary } from "../types";
+import type { GitDiffResult } from "../types";
+import { threadCwd } from "../lib/threads";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
@@ -132,18 +133,6 @@ function DiffText({ diff }: { diff: string }) {
       ))}
     </pre>
   );
-}
-
-/// Finds a thread's own `cwd` across the per-Project lists.
-function threadCwd(
-  threadsByProject: Record<string, ThreadSummary[]>,
-  threadId: string,
-): string | null {
-  for (const threads of Object.values(threadsByProject)) {
-    const match = threads.find((thread) => thread.id === threadId);
-    if (match?.cwd) return match.cwd;
-  }
-  return null;
 }
 
 function lineClass(line: string): string {
