@@ -2,6 +2,12 @@
 
 Reported upward per ADR-0021: a desired capability with no basis is a protocol gap, not a gap for `codex-desktop/` to fill locally.
 
+> **Status.** Sites 4 and 1 are now closed engine-side — `is_safe_svn_command` in
+> `shell-command`, and `core/src/project_root.rs` resolving the project root for git or
+> Subversion. Sites 2 and 3 remain open, and both are format decisions rather than
+> missing code. The per-site sections below are kept as written, with a closing note
+> on each of the two.
+
 `grep -rin "svn\|Subversion"` across `codex-rs/`, `codex-desktop/` and `docs/` returns **nothing**. There is no VCS abstraction to implement against — git is not one supported backend among several, it is assumed by name at four load-bearing points. Each is listed below with what an SVN-capable engine would have to do about it.
 
 ## 1. Trust boundary and workspace context
@@ -10,7 +16,9 @@ Reported upward per ADR-0021: a desired capability with no basis is a protocol g
 
 Outside a git repository this returns `None`, so an SVN working copy silently falls back to bare-`cwd` behaviour: no repository-level grouping, and a narrower workspace section than the equivalent git checkout would produce.
 
-**What SVN needs:** a VCS-agnostic "project root" resolution. This is the cheapest of the four — SVN's root is discoverable (walk up to the outermost `.svn`), and the concept transfers directly.
+**What SVN needs:** a VCS-agnostic "project root" resolution. This is the cheapest of the four, and the concept transfers directly.
+
+**Closed.** `core/src/project_root.rs` resolves git first, then Subversion, and reports which system answered so the callers that label the result can say what they found — an SVN working copy previously fell through to `### Directory:`, telling the model it was looking at loose files. One correction to the sentence above: the root is the *nearest* ancestor carrying `.svn`, not the outermost. Subversion 1.7 consolidated the per-directory `.svn` into a single one at the working-copy root, and nearest is also what nested copies need, which is exactly what `svn:externals` produces.
 
 ## 2. Thread metadata
 
@@ -32,6 +40,11 @@ Outside a git repository this returns `None`, so an SVN working copy silently fa
 
 Consequence: in an SVN working copy every `svn status` and `svn diff` the agent runs raises an approval prompt, while the git equivalents pass silently. This is the gap a user notices within the first minute — before any missing UI — and it is also the easiest to close, since the classifier is additive and mirroring the existing git logic for SVN's read-only subcommands requires no protocol change.
 
+**Closed.** `is_safe_svn_command` allowlists the read-only verbs and their aliases, failing closed on anything unlisted (`ci`, `co`). Mirroring git was not sufficient on its own, and the two departures are worth knowing:
+
+- Subversion keeps no local history, so `log`, `info` and revision-ranged `diff` reach the network where their git equivalents stay on disk. That is allowed against the working copy's own repository — it is simply how Subversion is read — but refused when an explicit URL operand names a server the user never did.
+- `--diff-cmd`, `--diff3-cmd` and `--editor-cmd` are Subversion's `--ext-diff`. They are refused together with `--config-dir`/`--config-option`, because a config override can set `diff-cmd` itself and blocking only the direct spelling would leave the hole open.
+
 ## Correction: the git baseline is *not* a blocker
 
 An earlier reading of this problem flagged `git-utils/src/baseline.rs` (`ensure_git_baseline_repository`, `reset_git_repository`, `diff_since_latest_init`) as the hardest obstacle, on the theory that the engine uses git as an undo mechanism for the user's working tree. **That is wrong.**
@@ -40,10 +53,12 @@ Its only non-test caller is `memories/write/src/workspace.rs:13-19,26-28,44-45`,
 
 ## Suggested sequencing
 
-1. **Command-safety classifier** — additive, no protocol change, removes the most visible daily friction.
-2. **Project-root resolution** — the concept transfers cleanly; unblocks trust and workspace context together.
-3. **Thread metadata shape** — decide the persisted format before more rollout files accumulate under the git-only assumption.
-4. **`ReviewTarget`** — last, because it is a wire-protocol change with three consumers, and because `UncommittedChanges` already covers the common case in the meantime.
+1. ~~**Command-safety classifier**~~ — done. Additive, no protocol change, removed the most visible daily friction.
+2. ~~**Project-root resolution**~~ — done. Unblocked trust grouping and workspace context together.
+3. **Thread metadata shape** — decide the persisted format before more rollout files accumulate under the git-only assumption. Open.
+4. **`ReviewTarget`** — last, because it is a wire-protocol change with three consumers, and because `UncommittedChanges` already covers the common case in the meantime. Open.
+
+What remains is not missing code. Both open items are decisions about a shape — one persisted, one on the wire — and both are cheaper to make before more data and more consumers accumulate under the current one.
 
 ## What Codex Desktop does today
 
