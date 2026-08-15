@@ -308,3 +308,193 @@ fn parse_cwds(
     cwds.map(|paths| paths.into_iter().map(parse_absolute_path).collect())
         .transpose()
 }
+
+// --- Feedback ---------------------------------------------------------------
+
+/// `feedback/upload`.
+///
+/// The parameters mirror what the TUI sends
+/// (`tui/src/app/background_requests.rs::feedback_upload_params`): a
+/// classification, optional free-text reason, the originating thread, and —
+/// only when the user opts in — logs.
+///
+/// `include_logs` is the consent bit and nothing else is inferred from it
+/// here. The TUI attaches the thread's rollout file as `extra_log_files` when
+/// logs are included; this client does **not**, because it has no rollout path
+/// of its own to offer and inventing one would be attaching a file the user
+/// was not shown. What the server itself collects under `include_logs` is the
+/// server's business, and the UI names it (see `FeedbackDialog`).
+///
+/// `classification` is passed through as the engine's own string values
+/// (`bad_result` / `good_result` / `bug` / `safety_check` / `other`, from
+/// `tui/src/bottom_pane/feedback_view.rs::feedback_classification`) rather
+/// than a vocabulary invented here.
+#[tauri::command]
+pub async fn upload_feedback(
+    bridge: State<'_, AppServerBridge>,
+    classification: String,
+    reason: Option<String>,
+    thread_id: Option<String>,
+    include_logs: bool,
+) -> CmdResult<JsonValue> {
+    bridge
+        .request(ClientRequest::FeedbackUpload {
+            request_id: bridge.next_request_id(),
+            params: codex_app_server_protocol::FeedbackUploadParams {
+                classification,
+                reason,
+                thread_id,
+                include_logs,
+                extra_log_files: None,
+                tags: None,
+            },
+        })
+        .await
+}
+
+// --- External agent config import (导入) ------------------------------------
+
+/// The migration sources the TUI probes, in its order
+/// (`tui/src/external_agent_config_migration/source.rs::ALL`).
+const MIGRATION_SOURCES: [(&str, &str); 2] = [("claude-code", "Claude Code"), ("cursor", "Cursor")];
+
+/// One detected migration item, flattened for display while keeping the
+/// original for echo-back.
+///
+/// `raw` matters: `externalAgentConfig/import` takes `migrationItems` of the
+/// same shape detection produced, and `ExternalAgentConfigMigrationItemType`
+/// is `#[serde(rename = "AGENTS_MD")]`-style SCREAMING_CASE among camelCase
+/// siblings. Round-tripping the server's own object means the frontend never
+/// constructs that enum and cannot get it wrong.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetectedMigrationItem {
+    /// Wire value of `itemType`, for display and grouping only.
+    pub item_type: String,
+    pub description: String,
+    /// Null/empty means home-scoped; non-empty means repo-scoped.
+    pub cwd: Option<String>,
+    /// The server's object, passed back to `import` untouched.
+    pub raw: JsonValue,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetectedMigrationSource {
+    /// `migrationSource` selector — must be passed back to `import` unchanged,
+    /// as the protocol doc requires.
+    pub source: String,
+    pub label: String,
+    pub items: Vec<DetectedMigrationItem>,
+    /// Detection failed for this source; the others may still have results.
+    pub error: Option<String>,
+}
+
+/// `externalAgentConfig/detect`, once per known source.
+///
+/// `includeHome: true` and the open Projects as `cwds`, mirroring the TUI,
+/// which passes its own cwd. Detection is read-only.
+#[tauri::command]
+pub async fn detect_external_agent_config(
+    bridge: State<'_, AppServerBridge>,
+    cwds: Vec<String>,
+) -> CmdResult<Vec<DetectedMigrationSource>> {
+    let cwds: Vec<std::path::PathBuf> = cwds.into_iter().map(std::path::PathBuf::from).collect();
+    let mut sources = Vec::new();
+
+    for (source, label) in MIGRATION_SOURCES {
+        let response = bridge
+            .request(ClientRequest::ExternalAgentConfigDetect {
+                request_id: bridge.next_request_id(),
+                params: codex_app_server_protocol::ExternalAgentConfigDetectParams {
+                    include_home: true,
+                    cwds: Some(cwds.clone()),
+                    max_session_age_days: None,
+                    max_sessions: None,
+                    source: None,
+                    migration_source: Some(source.to_string()),
+                },
+            })
+            .await;
+
+        // One source failing must not hide the others — the TUI logs and
+        // continues here too.
+        let (items, error) = match response {
+            Ok(value) => (parse_detected_items(&value), None),
+            Err(err) => (Vec::new(), Some(err)),
+        };
+
+        sources.push(DetectedMigrationSource {
+            source: source.to_string(),
+            label: label.to_string(),
+            items,
+            error,
+        });
+    }
+
+    Ok(sources)
+}
+
+fn parse_detected_items(value: &JsonValue) -> Vec<DetectedMigrationItem> {
+    value
+        .get("items")
+        .and_then(JsonValue::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| DetectedMigrationItem {
+                    item_type: item
+                        .get("itemType")
+                        .and_then(JsonValue::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                    description: item
+                        .get("description")
+                        .and_then(JsonValue::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                    cwd: item
+                        .get("cwd")
+                        .and_then(JsonValue::as_str)
+                        .map(ToString::to_string),
+                    raw: item.clone(),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// `externalAgentConfig/import`.
+///
+/// `migration_items` are the server's own detected objects, echoed back
+/// verbatim, and `migration_source` is the same selector detection used — the
+/// protocol requires both to match.
+///
+/// Import is additive by construction on the engine side, which is why this is
+/// safe to expose as a single confirm: `merge_missing_toml_values` only
+/// inserts keys absent from the target, `import_agents_md` writes only when
+/// the target AGENTS.md is missing or empty, and hooks copy via
+/// `copy_dir_recursive_skip_existing`
+/// (`external-agent-migration/src/{config_values,service,hooks_common}.rs`).
+/// Nothing here replaces an existing value.
+#[tauri::command]
+pub async fn import_external_agent_config(
+    bridge: State<'_, AppServerBridge>,
+    migration_source: String,
+    migration_items: Vec<JsonValue>,
+) -> CmdResult<JsonValue> {
+    let migration_items = serde_json::from_value(JsonValue::Array(migration_items))
+        .map_err(|err| format!("invalid migration items: {err}"))?;
+
+    bridge
+        .request(ClientRequest::ExternalAgentConfigImport {
+            request_id: bridge.next_request_id(),
+            params: codex_app_server_protocol::ExternalAgentConfigImportParams {
+                migration_items,
+                source: Some(crate::CLIENT_NAME.to_string()),
+                provider_id: Some(migration_source.clone()),
+                migration_source: Some(migration_source),
+            },
+        })
+        .await
+}

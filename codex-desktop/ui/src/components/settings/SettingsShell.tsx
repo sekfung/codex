@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import {
   ArrowLeft,
+  Download,
   Blocks,
   CreditCard,
   GitBranch,
@@ -19,6 +20,7 @@ import { useStore } from "../../store";
 import { GeneralSettings } from "./GeneralSettings";
 import { AppearanceSettings } from "./AppearanceSettings";
 import { ConfigSettings } from "./ConfigSettings";
+import { ImportSettings } from "./ImportSettings";
 import { AccountSettings } from "./AccountSettings";
 import { ConnectionsSettings } from "./ConnectionsSettings";
 import { HooksSettings } from "./HooksSettings";
@@ -50,6 +52,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: "个人",
     items: [
       { id: "general", label: "常规", Icon: Settings2, ready: true },
+      { id: "import", label: "导入", Icon: Download, ready: true },
       { id: "appearance", label: "外观", Icon: Palette, ready: true },
       { id: "config", label: "配置", Icon: Sliders, ready: true },
       { id: "keyboard", label: "键盘快捷键", Icon: Keyboard },
@@ -159,6 +162,7 @@ export function SettingsShell() {
           {active === "general" && <GeneralSettings />}
           {active === "appearance" && <AppearanceSettings />}
           {active === "config" && <ConfigSettings />}
+          {active === "import" && <ImportSettings />}
           {active === "account" && <AccountSettings />}
           {active === "plugins" && <PluginsSettings />}
           {active === "connections" && <ConnectionsSettings />}

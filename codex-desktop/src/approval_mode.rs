@@ -123,8 +123,7 @@ impl ApprovalMode {
                 };
                 approval_policy.is_some_and(|policy| *policy == resolved.approval_policy)
                     && reviewer == resolved.approvals_reviewer
-                    && permission_profile_id
-                        .is_some_and(|id| id == resolved.permission_profile_id)
+                    && permission_profile_id.is_some_and(|id| id == resolved.permission_profile_id)
             })
     }
 }

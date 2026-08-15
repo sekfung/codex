@@ -214,7 +214,9 @@ pub async fn read_default_approval_mode(
         .map(|value| serde_json::from_value(value.clone()))
         .transpose()
         .map_err(|err| format!("config approvalsReviewer is not a known reviewer: {err}"))?;
-    let permission_profile_id = config.get("default_permissions").and_then(JsonValue::as_str);
+    let permission_profile_id = config
+        .get("default_permissions")
+        .and_then(JsonValue::as_str);
 
     Ok(ApprovalMode::from_config_parts(
         approval_policy.as_ref(),

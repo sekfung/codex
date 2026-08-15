@@ -14,6 +14,7 @@
 //! than re-derive. The frontend sends its own flat shapes; this module maps
 //! them onto the protocol.
 
+use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CollaborationModeListParams;
 use codex_app_server_protocol::CollaborationModeListResponse;
@@ -88,6 +89,159 @@ pub struct ComposerFileRef {
     pub path: String,
 }
 
+/// An app (connector) or plugin the user referenced from the `@` menu's 插件
+/// section.
+///
+/// Unlike a file — which is plain text — these *are* structured mentions. The
+/// canonical construction is in the TUI and is reproduced exactly here,
+/// because a wrong URI means the engine silently fails to resolve the mention
+/// rather than erroring:
+///
+/// - app: `UserInput::Mention { name: <app name>, path: "app://{app id}" }`
+///   (`chat_composer.rs:4163-4171`, consumed in
+///   `chatwidget/input_submission.rs` by `strip_prefix("app://")`)
+/// - plugin: `UserInput::Mention { name: <display name>,
+///   path: "plugin://{config_name}" }`
+///   (`mentions_v2/search_catalog.rs::plugin_candidate`, consumed by
+///   `strip_prefix("plugin://")`)
+///
+/// `config_name` is not a protocol field, but it is not a guess either:
+/// `impl From<PluginDetail> for PluginCapabilitySummary`
+/// (`core-plugins/src/manager.rs:412`) sets `config_name: value.id`, and `id`
+/// *is* on the wire as `PluginSummary.id`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ComposerMention {
+    /// A connector from `app/list`. `id` is `AppInfo.id`.
+    App { id: String, name: String },
+    /// A plugin from `plugin/list`. `id` is `PluginSummary.id`, which is the
+    /// `config_name` the engine matches on.
+    Plugin { id: String, name: String },
+}
+
+impl ComposerMention {
+    fn into_user_input(self) -> UserInput {
+        match self {
+            Self::App { id, name } => UserInput::Mention {
+                name,
+                path: format!("app://{id}"),
+            },
+            Self::Plugin { id, name } => UserInput::Mention {
+                name,
+                path: format!("plugin://{id}"),
+            },
+        }
+    }
+
+    /// The visible token left in the message text.
+    ///
+    /// The structured item above is what the engine resolves; this is what the
+    /// model reads. Both TUI popups derive it from the entity rather than from
+    /// the raw id, so this does too.
+    ///
+    /// One deliberate divergence: the TUI's connector popup inserts `${slug}`
+    /// (`chat_composer.rs:4167`) while its plugin popup inserts `@{name}`.
+    /// This client uses `@` for both, matching the Official App's single `@`
+    /// menu and `PLUGIN_TEXT_MENTION_SIGIL`, whose doc comment is explicitly
+    /// "Plugins use `@` in linked plaintext outside TUI". The sigil is
+    /// presentation (ADR-0021 test 2); the resolved mention is unaffected.
+    pub fn mention_token(&self) -> String {
+        match self {
+            Self::App { name, .. } => format!("@{}", connector_name_slug(name)),
+            Self::Plugin { id, name } => {
+                let plugin_name = id.split_once('@').map_or(id.as_str(), |(name, _)| name);
+                format!("@{}", plugin_mention_name(plugin_name, name))
+            }
+        }
+    }
+}
+
+/// Ported from `connectors/src/lib.rs::connector_name_slug`.
+fn connector_name_slug(name: &str) -> String {
+    let mut normalized = String::with_capacity(name.len());
+    for character in name.chars() {
+        if character.is_ascii_alphanumeric() {
+            normalized.push(character.to_ascii_lowercase());
+        } else {
+            normalized.push('-');
+        }
+    }
+    let normalized = normalized.trim_matches('-');
+    if normalized.is_empty() {
+        "app".to_string()
+    } else {
+        normalized.to_string()
+    }
+}
+
+/// Ported from `mentions_v2/search_catalog.rs::plugin_mention_name`: when the
+/// display name is just a prettier spelling of the config name, keep the
+/// display casing and the config separators; otherwise title-case the config
+/// name.
+fn plugin_mention_name(plugin_name: &str, display_name: &str) -> String {
+    let plugin_segments = split_plugin_name_segments(plugin_name);
+    let display_segments: Vec<String> = display_name
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .filter(|segment| !segment.is_empty())
+        .map(ToString::to_string)
+        .collect();
+
+    if plugin_segments.len() == display_segments.len()
+        && plugin_segments
+            .iter()
+            .zip(&display_segments)
+            .all(|((segment, _), display)| segment.eq_ignore_ascii_case(display))
+    {
+        let mut result = String::new();
+        for ((_, separator), display) in plugin_segments.into_iter().zip(display_segments) {
+            result.push_str(&display);
+            if let Some(separator) = separator {
+                result.push(separator);
+            }
+        }
+        return result;
+    }
+
+    title_case_plugin_name(plugin_name)
+}
+
+fn split_plugin_name_segments(plugin_name: &str) -> Vec<(String, Option<char>)> {
+    let mut segments = Vec::new();
+    let mut current = String::new();
+    for character in plugin_name.chars() {
+        if matches!(character, '-' | '_') {
+            if !current.is_empty() {
+                segments.push((std::mem::take(&mut current), Some(character)));
+            }
+        } else {
+            current.push(character);
+        }
+    }
+    if !current.is_empty() {
+        segments.push((current, None));
+    }
+    segments
+}
+
+fn title_case_plugin_name(plugin_name: &str) -> String {
+    let mut result = String::with_capacity(plugin_name.len());
+    let mut capitalize_next = true;
+    for character in plugin_name.chars() {
+        if matches!(character, '-' | '_') {
+            capitalize_next = true;
+            result.push(character);
+            continue;
+        }
+        if capitalize_next && character.is_ascii_alphabetic() {
+            result.push(character.to_ascii_uppercase());
+            capitalize_next = false;
+        } else {
+            result.push(character);
+        }
+    }
+    result
+}
+
 /// Quotes a path the way the TUI does before putting it in the message.
 ///
 /// Copied from `chat_composer.rs::insert_selected_path`: wrap in double quotes
@@ -103,8 +257,10 @@ fn quote_path_for_prompt(path: &str) -> String {
 }
 
 /// Assembles the turn payload in the same order the TUI does: images, then
-/// text, then skills (`chatwidget/input_submission.rs`). Order is part of what
-/// the model sees, so it is copied rather than chosen.
+/// text, then skills, then plugin mentions, then app mentions
+/// (`chatwidget/input_submission.rs`, which emits them in exactly that
+/// sequence). Order is part of what the model sees, so it is copied rather
+/// than chosen.
 ///
 /// `file_refs` are folded into the `Text` item rather than becoming items of
 /// their own. They are placed **before** the typed text: the TUI inserts a
@@ -118,6 +274,7 @@ pub(crate) fn build_turn_input(
     attachments: Vec<ComposerAttachment>,
     skills: Vec<ComposerSkill>,
     file_refs: Vec<ComposerFileRef>,
+    mentions: Vec<ComposerMention>,
 ) -> Vec<UserInput> {
     let mut input = Vec::new();
 
@@ -156,6 +313,14 @@ pub(crate) fn build_turn_input(
         });
     }
 
+    // Plugins before apps, matching `input_submission.rs`'s two loops.
+    let (plugins, apps): (Vec<_>, Vec<_>) = mentions
+        .into_iter()
+        .partition(|mention| matches!(mention, ComposerMention::Plugin { .. }));
+    for mention in plugins.into_iter().chain(apps) {
+        input.push(mention.into_user_input());
+    }
+
     input
 }
 
@@ -167,14 +332,46 @@ pub async fn send_turn(
     attachments: Vec<ComposerAttachment>,
     skills: Vec<ComposerSkill>,
     file_refs: Vec<ComposerFileRef>,
+    mentions: Vec<ComposerMention>,
 ) -> CmdResult<JsonValue> {
     bridge
         .request(ClientRequest::TurnStart {
             request_id: bridge.next_request_id(),
             params: TurnStartParams {
                 thread_id,
-                input: build_turn_input(text, attachments, skills, file_refs),
+                input: build_turn_input(text, attachments, skills, file_refs, mentions),
                 ..Default::default()
+            },
+        })
+        .await
+}
+
+/// The `@…` token to insert for a chosen app/plugin.
+///
+/// Exposed as a command so the slug and title-casing rules stay next to the
+/// engine functions they were ported from, rather than being a second
+/// implementation in TypeScript that drifts on the next upstream merge.
+#[tauri::command]
+pub fn mention_token(mention: ComposerMention) -> String {
+    mention.mention_token()
+}
+
+/// `app/list` — the connectors the Official App shows in the `@` menu's 插件
+/// section.
+///
+/// Experimental, like the rest of the apps surface. `threadId` is left `None`:
+/// the composer's catalog is the global one, and the per-thread form only
+/// changes feature gating.
+#[tauri::command]
+pub async fn list_apps(bridge: State<'_, AppServerBridge>) -> CmdResult<JsonValue> {
+    bridge
+        .request(ClientRequest::AppsList {
+            request_id: bridge.next_request_id(),
+            params: AppsListParams {
+                cursor: None,
+                limit: None,
+                thread_id: None,
+                force_refetch: false,
             },
         })
         .await
@@ -499,6 +696,7 @@ mod tests {
                 UserInput::Image { .. } => "image",
                 UserInput::LocalImage { .. } => "localImage",
                 UserInput::Skill { .. } => "skill",
+                UserInput::Mention { .. } => "mention",
                 _ => "other",
             })
             .collect()
@@ -522,6 +720,7 @@ mod tests {
                 name: "review".to_string(),
                 path: PathBuf::from("/skills/review"),
             }],
+            Vec::new(),
             Vec::new(),
         );
 
@@ -554,6 +753,7 @@ mod tests {
                 path: PathBuf::from("/skills/review"),
             }],
             Vec::new(),
+            Vec::new(),
         );
 
         assert_eq!(kinds(&input), vec!["text", "skill"]);
@@ -567,6 +767,7 @@ mod tests {
             vec![ComposerAttachment::LocalImage {
                 path: PathBuf::from("/tmp/b.png"),
             }],
+            Vec::new(),
             Vec::new(),
             Vec::new(),
         );
@@ -597,6 +798,7 @@ mod tests {
                     path: "docs/adr".to_string(),
                 },
             ],
+            Vec::new(),
         );
 
         assert_eq!(kinds(&input), vec!["text"]);
@@ -614,6 +816,7 @@ mod tests {
             vec![ComposerFileRef {
                 path: "src/main.rs".to_string(),
             }],
+            Vec::new(),
         );
 
         assert_eq!(kinds(&input), vec!["text"]);
@@ -627,6 +830,116 @@ mod tests {
         assert_eq!(quote_path_for_prompt("src/main.rs"), "src/main.rs");
         assert_eq!(quote_path_for_prompt("my docs/a.md"), "\"my docs/a.md\"");
         assert_eq!(quote_path_for_prompt("odd \"name\".md"), "odd \"name\".md");
+    }
+
+    fn mention_paths(input: &[UserInput]) -> Vec<(&str, &str)> {
+        input
+            .iter()
+            .filter_map(|item| match item {
+                UserInput::Mention { name, path } => Some((name.as_str(), path.as_str())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The URI shapes the engine matches on. A wrong prefix here does not
+    /// error — `input_submission.rs` simply fails to resolve the mention and
+    /// drops it — so the format is pinned rather than trusted.
+    ///
+    /// `app://{AppInfo.id}` comes from `chat_composer.rs:4168`;
+    /// `plugin://{config_name}` from `mentions_v2/search_catalog.rs`, where
+    /// `config_name` is `PluginDetail.id` per `core-plugins/src/manager.rs`.
+    #[test]
+    fn mentions_use_the_engines_uri_scheme() {
+        let input = build_turn_input(
+            "ask @figma".to_string(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            vec![
+                ComposerMention::App {
+                    id: "figma-1".to_string(),
+                    name: "Figma".to_string(),
+                },
+                ComposerMention::Plugin {
+                    id: "sample@test".to_string(),
+                    name: "Sample".to_string(),
+                },
+            ],
+        );
+
+        assert_eq!(
+            mention_paths(&input),
+            vec![
+                ("Sample", "plugin://sample@test"),
+                ("Figma", "app://figma-1"),
+            ]
+        );
+    }
+
+    /// Plugin mentions precede app mentions, and both follow skills — the
+    /// order `input_submission.rs` emits them in.
+    #[test]
+    fn mentions_follow_skills_with_plugins_before_apps() {
+        let input = build_turn_input(
+            "hi".to_string(),
+            Vec::new(),
+            vec![ComposerSkill {
+                name: "review".to_string(),
+                path: PathBuf::from("/skills/review"),
+            }],
+            Vec::new(),
+            vec![
+                ComposerMention::App {
+                    id: "a".to_string(),
+                    name: "A".to_string(),
+                },
+                ComposerMention::Plugin {
+                    id: "p".to_string(),
+                    name: "P".to_string(),
+                },
+            ],
+        );
+
+        assert_eq!(kinds(&input), vec!["text", "skill", "mention", "mention"]);
+        assert_eq!(
+            mention_paths(&input),
+            vec![("P", "plugin://p"), ("A", "app://a")]
+        );
+    }
+
+    /// Token derivation follows the engine's own helpers: an app slug is
+    /// `connector_name_slug` (lowercased, non-alphanumerics collapsed to `-`),
+    /// and a plugin keeps display casing when the display name is just a
+    /// prettier spelling of the config name, else title-cases it.
+    #[test]
+    fn mention_tokens_match_the_engines_naming() {
+        let app = ComposerMention::App {
+            id: "gcal".to_string(),
+            name: "Google Calendar".to_string(),
+        };
+        assert_eq!(app.mention_token(), "@google-calendar");
+
+        // Marketplace suffix is dropped before naming.
+        let matching = ComposerMention::Plugin {
+            id: "my-plugin@market".to_string(),
+            name: "My Plugin".to_string(),
+        };
+        assert_eq!(matching.mention_token(), "@My-Plugin");
+
+        // Display name unrelated to the config name: title-case the latter.
+        let diverging = ComposerMention::Plugin {
+            id: "pdf-tools".to_string(),
+            name: "Documents".to_string(),
+        };
+        assert_eq!(diverging.mention_token(), "@Pdf-Tools");
+
+        // Degenerate names still produce a usable token rather than "@".
+        let punctuation = ComposerMention::App {
+            id: "x".to_string(),
+            name: "!!!".to_string(),
+        };
+        assert_eq!(punctuation.mention_token(), "@app");
     }
 
     /// Below the baseline the engine reports 0%, not a negative or clamped

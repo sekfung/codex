@@ -8,6 +8,7 @@ import type {
   CollaborationModePreset,
   ComposerAttachment,
   ComposerFileRef,
+  ComposerMention,
   ComposerSkill,
   ConfigReadResponse,
   ConfigRequirementsReadResponse,
@@ -23,6 +24,8 @@ import type {
   McpServerOauthLoginResponse,
   ModelListResponse,
   PluginListResponse,
+  AppsListResponse,
+  DetectedMigrationSource,
   Project,
   QueuedSubmissionView,
   ReasoningEffort,
@@ -160,7 +163,9 @@ export const sendTurn = (
   attachments: ComposerAttachment[] = [],
   skills: ComposerSkill[] = [],
   fileRefs: ComposerFileRef[] = [],
-) => invoke<unknown>("send_turn", { threadId, text, attachments, skills, fileRefs });
+  mentions: ComposerMention[] = [],
+) =>
+  invoke<unknown>("send_turn", { threadId, text, attachments, skills, fileRefs, mentions });
 export const interruptTurn = (threadId: string, turnId: string) =>
   invoke<unknown>("interrupt_turn", { threadId, turnId });
 
@@ -196,6 +201,35 @@ export const pickAnyFiles = () =>
 
 export const pickAnyFolders = () =>
   open({ title: "选择文件夹", multiple: true, directory: true });
+
+/// `app/list` — the 插件 section of the `@` menu.
+export const listApps = () => invoke<AppsListResponse>("list_apps");
+
+/// The `@…` token for a chosen app/plugin. Derived in Rust so the slug and
+/// title-case rules stay next to the engine helpers they were ported from.
+export const mentionToken = (mention: ComposerMention) =>
+  invoke<string>("mention_token", { mention });
+
+// -- Feedback (`feedback/upload`) --------------------------------------------
+
+/// `classification` uses the engine's own values (`bad_result`, `good_result`,
+/// `bug`, `safety_check`, `other`). `includeLogs` is the consent bit.
+export const uploadFeedback = (
+  classification: string,
+  reason: string | null,
+  threadId: string | null,
+  includeLogs: boolean,
+) => invoke<unknown>("upload_feedback", { classification, reason, threadId, includeLogs });
+
+// -- External agent import (导入) --------------------------------------------
+
+export const detectExternalAgentConfig = (cwds: string[]) =>
+  invoke<DetectedMigrationSource[]>("detect_external_agent_config", { cwds });
+
+/// `migrationItems` must be the server's own detected objects, echoed back
+/// unchanged, with the same `migrationSource` detection used.
+export const importExternalAgentConfig = (migrationSource: string, migrationItems: unknown[]) =>
+  invoke<unknown>("import_external_agent_config", { migrationSource, migrationItems });
 
 export const listSkills = (cwds: string[] = [], forceReload = false) =>
   invoke<SkillsListResponse>("list_skills", { cwds, forceReload });
@@ -327,7 +361,9 @@ export const queueAdd = (
   attachments: ComposerAttachment[] = [],
   skills: ComposerSkill[] = [],
   fileRefs: ComposerFileRef[] = [],
-) => invoke<unknown>("queue_add", { threadId, text, attachments, skills, fileRefs });
+  mentions: ComposerMention[] = [],
+) =>
+  invoke<unknown>("queue_add", { threadId, text, attachments, skills, fileRefs, mentions });
 
 export const queueList = (threadId: string) =>
   invoke<QueuedSubmissionView[]>("queue_list", { threadId });

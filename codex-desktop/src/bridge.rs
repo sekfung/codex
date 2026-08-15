@@ -72,7 +72,10 @@ impl AppServerBridge {
     pub async fn request(&self, request: ClientRequest) -> Result<JsonValue, String> {
         let (respond_to, response) = oneshot::channel();
         self.job_tx
-            .send(BridgeJob::Request { request, respond_to })
+            .send(BridgeJob::Request {
+                request,
+                respond_to,
+            })
             .map_err(|_| "app-server bridge task is gone".to_string())?;
         response
             .await
@@ -155,7 +158,10 @@ async fn run_bridge_loop(
 
 async fn handle_job(client: &InProcessAppServerClient, job: BridgeJob) {
     match job {
-        BridgeJob::Request { request, respond_to } => {
+        BridgeJob::Request {
+            request,
+            respond_to,
+        } => {
             let outcome = match client.request(request).await {
                 Ok(Ok(result)) => Ok(result),
                 Ok(Err(err)) => Err(format!("{} (code {})", err.message, err.code)),

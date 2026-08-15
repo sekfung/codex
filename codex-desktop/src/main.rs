@@ -10,9 +10,9 @@
 
 mod approval_mode;
 mod bridge;
-mod config_settings;
 mod commands;
 mod composer;
+mod config_settings;
 mod integrations;
 mod projects;
 mod thread_ops;
@@ -151,10 +151,16 @@ async fn start_app_server_client() -> Option<InProcessAppServerClient> {
         .await
     {
         Ok(Ok(result)) => {
-            tracing::info!(?result, "app-server round-trip succeeded (config/requirements/read)");
+            tracing::info!(
+                ?result,
+                "app-server round-trip succeeded (config/requirements/read)"
+            );
         }
         Ok(Err(err)) => {
-            tracing::error!(?err, "app-server returned a JSON-RPC error for startup probe");
+            tracing::error!(
+                ?err,
+                "app-server returned a JSON-RPC error for startup probe"
+            );
         }
         Err(err) => {
             tracing::error!(%err, "app-server startup probe transport failure");
@@ -237,6 +243,8 @@ fn main() {
             composer::context_usage,
             composer::list_collaboration_modes,
             composer::set_collaboration_mode,
+            composer::list_apps,
+            composer::mention_token,
             thread_ops::queue_add,
             thread_ops::queue_list,
             thread_ops::queue_update,
@@ -277,6 +285,9 @@ fn main() {
             integrations::start_account_login,
             integrations::cancel_account_login,
             integrations::logout_account,
+            integrations::upload_feedback,
+            integrations::detect_external_agent_config,
+            integrations::import_external_agent_config,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Codex Desktop");

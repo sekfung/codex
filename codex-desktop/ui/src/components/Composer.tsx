@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowUp,
+  Blocks,
   Check,
   ChevronDown,
   CircleAlert,
@@ -23,7 +24,9 @@ import * as api from "../api";
 import type {
   ApprovalMode,
   ComposerAttachment,
+  AppInfo,
   ComposerFileRef,
+  ComposerMention,
   ComposerSkill,
   FileSearchHit,
   ModelSelection,
@@ -35,6 +38,7 @@ import { ContextMeter } from "./ContextMeter";
 import { BackgroundTerminals } from "./BackgroundTerminals";
 import { GoalPanel } from "./GoalPanel";
 import { QueuePanel } from "./QueuePanel";
+import { FeedbackDialog } from "./FeedbackDialog";
 import { ReviewLauncher } from "./ReviewLauncher";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -160,6 +164,13 @@ export function Composer({ threadId }: { threadId: string }) {
   /// beside the image attachments; Rust folds their paths into the text on
   /// send, because a file reference has no structured `UserInput` variant.
   const [fileRefs, setFileRefs] = useState<ComposerFileRef[]>([]);
+  /// Apps/plugins picked from the `@` menu's 插件 section. Like skills, the
+  /// `@token` also stays in the text and the structured item rides alongside.
+  const [pickedMentions, setPickedMentions] = useState<ComposerMention[]>([]);
+  /// The token Rust derived for each pick, so the "still referenced in the
+  /// text" check below compares against the real token rather than
+  /// re-deriving it here.
+  const mentionTokens = useRef(new Map<string, string>());
   /// `@` file completions. Unlike skills there is no companion structured
   /// item — a picked file becomes plain path text, which is the engine's own
   /// model (see `file_mentions_are_text_only` in `src/composer.rs`).
@@ -201,6 +212,18 @@ export function Composer({ threadId }: { threadId: string }) {
   const activeSkills = useMemo(
     () => pickedSkills.filter((skill) => text.includes(`$${skill.name}`)),
     [pickedSkills, text],
+  );
+
+  /// Mentions still referenced in the text. Deleting the `@token` after
+  /// picking it drops the structured item too — the same rule `activeSkills`
+  /// applies, so the engine never resolves a mention the message dropped.
+  const activeMentions = useMemo(
+    () =>
+      pickedMentions.filter((mention) => {
+        const token = mentionTokens.current.get(`${mention.kind}:${mention.id}`);
+        return token ? text.includes(token) : false;
+      }),
+    [pickedMentions, text],
   );
 
   const skillMatches = useMemo(() => {
@@ -276,7 +299,24 @@ export function Composer({ threadId }: { threadId: string }) {
     | { kind: "pickFolders" }
     | { kind: "goal" }
     | { kind: "plan" }
+    | { kind: "app"; app: AppInfo }
     | { kind: "file"; hit: FileSearchHit };
+
+  /// The 插件 section: connectors from `app/list`.
+  ///
+  /// Filtered by `isAccessible && isEnabled`, which is the engine's own
+  /// mentionability rule (`tui/src/chatwidget/skills.rs::is_app_mentionable`,
+  /// applied identically in `chat_composer.rs` when building the popup) — not
+  /// a display preference. Listing an app that fails it would offer a mention
+  /// the engine then refuses to resolve.
+  const appMatches = useMemo(() => {
+    if (!fileQuery) return [];
+    const needle = fileQuery.query.toLowerCase();
+    return state.apps
+      .filter((app) => app.isAccessible && app.isEnabled)
+      .filter((app) => needle === "" || app.name.toLowerCase().includes(needle))
+      .slice(0, 6);
+  }, [fileQuery, state.apps]);
 
   /// Whether 计划模式 can be offered at all.
   ///
@@ -302,11 +342,14 @@ export function Composer({ threadId }: { threadId: string }) {
     if (matches("目标goal")) entries.push({ kind: "goal" });
     // The TUI refuses to switch collaboration mode mid-turn, so neither do we.
     if (planPreset && !turnRunning && matches("计划模式plan")) entries.push({ kind: "plan" });
+    for (const app of appMatches) {
+      entries.push({ kind: "app", app });
+    }
     for (const hit of fileMatches) {
       entries.push({ kind: "file", hit });
     }
     return entries;
-  }, [fileQuery, fileMatches, planPreset, turnRunning]);
+  }, [fileQuery, fileMatches, appMatches, planPreset, turnRunning]);
 
   /// Removes the `@token` the menu was triggered from, without inserting
   /// anything — used when the chosen entry opens a panel instead of producing
@@ -337,9 +380,35 @@ export function Composer({ threadId }: { threadId: string }) {
         consumeMentionToken();
         void handlePickPaths("folders");
         return;
+      case "app":
+        void chooseApp(entry.app);
+        return;
       case "file":
         chooseFile(entry.hit);
     }
+  }
+
+  /// Inserts an app mention: the `@token` in the text *and* the structured
+  /// item, the same two-part shape `$skill` uses.
+  ///
+  /// The token comes from Rust rather than being formatted here — it is the
+  /// engine's `connector_name_slug`, and a second implementation in TS would
+  /// drift (`src/composer.rs::mention_token`).
+  async function chooseApp(app: AppInfo) {
+    if (!fileQuery) return;
+    const mention: ComposerMention = { kind: "app", id: app.id, name: app.name };
+    const token = await api.mentionToken(mention);
+    mentionTokens.current.set(`${mention.kind}:${mention.id}`, token);
+    const caret = textareaRef.current?.selectionStart ?? text.length;
+    setText(`${text.slice(0, fileQuery.start)}${token} ${text.slice(caret)}`);
+    setPickedMentions((current) =>
+      current.some((entry) => entry.kind === "app" && entry.id === app.id)
+        ? current
+        : [...current, mention],
+    );
+    setFileQuery(null);
+    setFileMatches([]);
+    queueMicrotask(() => textareaRef.current?.focus());
   }
 
   /// Two entries — 文件 and 文件夹 — rather than the Official App's single
@@ -439,14 +508,15 @@ export function Composer({ threadId }: { threadId: string }) {
     setSending(true);
     try {
       if (turnRunning) {
-        await queueMessage(threadId, trimmed, attachments, activeSkills, fileRefs);
+        await queueMessage(threadId, trimmed, attachments, activeSkills, fileRefs, activeMentions);
       } else {
-        await sendMessage(threadId, trimmed, attachments, activeSkills, fileRefs);
+        await sendMessage(threadId, trimmed, attachments, activeSkills, fileRefs, activeMentions);
       }
       setText("");
       setAttachments([]);
       setFileRefs([]);
       setPickedSkills([]);
+      setPickedMentions([]);
       setSkillQuery(null);
       setFileQuery(null);
       setFileMatches([]);
@@ -549,18 +619,26 @@ export function Composer({ threadId }: { threadId: string }) {
                 // Section headers are rendered inline with their first entry
                 // so the flat keyboard list and the visual grouping stay in
                 // sync automatically.
+                // Headers render inline with the first entry of their group,
+                // so the flat keyboard list and the visual grouping cannot
+                // drift apart.
+                const previous = mentionEntries[index - 1]?.kind;
                 const header =
                   index === 0
                     ? "添加"
-                    : entry.kind === "file" && mentionEntries[index - 1]?.kind !== "file"
-                      ? "文件"
-                      : null;
+                    : entry.kind === "app" && previous !== "app"
+                      ? "插件"
+                      : entry.kind === "file" && previous !== "file"
+                        ? "文件"
+                        : null;
                 return (
                   <div
                     key={
                       entry.kind === "file"
                         ? `${entry.hit.root}/${entry.hit.path}`
-                        : entry.kind
+                        : entry.kind === "app"
+                          ? `app:${entry.app.id}`
+                          : entry.kind
                     }
                   >
                     {header && (
@@ -591,6 +669,12 @@ export function Composer({ threadId }: { threadId: string }) {
                           Icon={Lightbulb}
                           title="计划模式"
                           hint={planActive ? "关闭计划模式" : "开启计划模式"}
+                        />
+                      ) : entry.kind === "app" ? (
+                        <MentionRow
+                          Icon={Blocks}
+                          title={entry.app.name}
+                          hint={entry.app.description ?? ""}
                         />
                       ) : (
                         <>
@@ -795,6 +879,7 @@ export function Composer({ threadId }: { threadId: string }) {
             )}
 
             <ReviewLauncher threadId={threadId} />
+            <FeedbackDialog threadId={threadId} />
 
             <BackgroundTerminals threadId={threadId} />
 

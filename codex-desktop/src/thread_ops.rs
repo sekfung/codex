@@ -36,6 +36,7 @@ use uuid::Uuid;
 use crate::bridge::AppServerBridge;
 use crate::composer::ComposerAttachment;
 use crate::composer::ComposerFileRef;
+use crate::composer::ComposerMention;
 use crate::composer::ComposerSkill;
 use crate::composer::build_turn_input;
 
@@ -116,13 +117,14 @@ pub async fn queue_add(
     attachments: Vec<ComposerAttachment>,
     skills: Vec<ComposerSkill>,
     file_refs: Vec<ComposerFileRef>,
+    mentions: Vec<ComposerMention>,
 ) -> CmdResult<JsonValue> {
     bridge
         .request(ClientRequest::ThreadQueueAdd {
             request_id: bridge.next_request_id(),
             params: ThreadQueueAddParams {
                 thread_id,
-                input: build_turn_input(text, attachments, skills, file_refs),
+                input: build_turn_input(text, attachments, skills, file_refs, mentions),
                 // Required by the API. The engine would mint one itself if it
                 // were absent, but the wire type is not optional.
                 client_user_message_id: Uuid::now_v7().to_string(),
@@ -173,7 +175,7 @@ pub async fn queue_update(
             params: ThreadQueueUpdateParams {
                 thread_id,
                 queued_submission_id,
-                input: build_turn_input(text, Vec::new(), Vec::new(), Vec::new()),
+                input: build_turn_input(text, Vec::new(), Vec::new(), Vec::new(), Vec::new()),
             },
         })
         .await
@@ -462,6 +464,7 @@ mod tests {
                     path: PathBuf::from("/skills/review"),
                 }],
                 Vec::new(),
+                Vec::new(),
             ),
         });
 
@@ -507,7 +510,10 @@ mod tests {
     /// different requests that JSON `null` alone cannot tell apart.
     #[test]
     fn token_budget_edit_maps_onto_double_option() {
-        assert_eq!(Option::<Option<i64>>::from(TokenBudgetEdit::Unchanged), None);
+        assert_eq!(
+            Option::<Option<i64>>::from(TokenBudgetEdit::Unchanged),
+            None
+        );
         assert_eq!(
             Option::<Option<i64>>::from(TokenBudgetEdit::Clear),
             Some(None)

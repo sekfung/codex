@@ -18,7 +18,9 @@ import type {
   CommandExecutionItem,
   CollaborationModePreset,
   ComposerAttachment,
+  AppInfo,
   ComposerFileRef,
+  ComposerMention,
   ComposerSkill,
   ConfigLayerMetadata,
   ConfigRequirements,
@@ -204,10 +206,16 @@ interface State {
   /// Projects. Refreshed on `skills/changed`. Empty is a legitimate state
   /// (no skills installed), so the typeahead simply finds nothing.
   skills: SkillMetadata[];
+  /// Connectors available for `@` mentions, from `app/list`, refreshed on
+  /// `app/list/updated`. Only accessible+enabled entries are mentionable —
+  /// the filter is applied where the menu is built, mirroring
+  /// `is_app_mentionable`.
+  apps: AppInfo[];
 }
 
 type Action =
   | { type: "SKILLS_LOADED"; skills: SkillMetadata[] }
+  | { type: "APPS_LOADED"; apps: AppInfo[] }
   | { type: "TOKEN_USAGE_UPDATED"; threadId: string; tokenUsage: ThreadTokenUsage }
   | { type: "CONTEXT_USAGE_COMPUTED"; threadId: string; contextUsage: ContextUsage }
   | { type: "COMPACTION_STARTED"; threadId: string }
@@ -434,6 +442,8 @@ function reducer(state: State, action: Action): State {
       return { ...state, rateLimits: mergeRateLimits(state.rateLimits, action.rateLimits) };
     case "SKILLS_LOADED":
       return { ...state, skills: action.skills };
+    case "APPS_LOADED":
+      return { ...state, apps: action.apps };
     case "TOKEN_USAGE_UPDATED":
       return withThread(state, action.threadId, (thread) => ({
         ...thread,
@@ -742,6 +752,7 @@ const initialState: State = {
   mcpRuntime: {},
   pendingLogin: null,
   skills: [],
+  apps: [],
 };
 
 interface StoreValue {
@@ -758,6 +769,7 @@ interface StoreValue {
     attachments?: ComposerAttachment[],
     skills?: ComposerSkill[],
     fileRefs?: ComposerFileRef[],
+    mentions?: ComposerMention[],
   ) => Promise<void>;
   compactThread: (threadId: string) => Promise<void>;
   startReview: (
@@ -777,6 +789,7 @@ interface StoreValue {
     attachments?: ComposerAttachment[],
     skills?: ComposerSkill[],
     fileRefs?: ComposerFileRef[],
+    mentions?: ComposerMention[],
   ) => Promise<void>;
   refetchQueue: (threadId: string) => Promise<void>;
   editQueued: (threadId: string, queuedSubmissionId: string, text: string) => Promise<void>;
@@ -963,6 +976,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       .catch((error) => tracingWarn(`skills/list failed: ${String(error)}`));
   }, []);
 
+  /// `app/list` for the `@` menu's 插件 section.
+  ///
+  /// A failure leaves the catalog empty, so the section simply does not
+  /// appear — the same outcome as having no connectors, and better than a
+  /// section that lists apps this build cannot actually mention.
+  const refetchApps = useCallback(() => {
+    api
+      .listApps()
+      .then((response) => dispatch({ type: "APPS_LOADED", apps: response.data ?? [] }))
+      .catch((error) => tracingWarn(`app/list failed: ${String(error)}`));
+  }, []);
+
   const computeContextUsage = useCallback((threadId: string, usage: ThreadTokenUsage) => {
     api
       .contextUsage(
@@ -992,6 +1017,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     refetchSkills();
   }, [refetchSkills, state.projects]);
 
+  // Apps are account-scoped rather than per-cwd, so unlike skills this only
+  // needs fetching once; `app/list/updated` keeps it current afterwards.
+  useEffect(() => {
+    refetchApps();
+  }, [refetchApps]);
+
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     api
@@ -999,6 +1030,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         handleEvent(envelope, dispatch, {
           refetchAccount,
           refetchSkills,
+          refetchApps,
           computeContextUsage,
           refetchQueue: (threadId) => {
             refetchQueue(threadId).catch((error) =>
@@ -1011,7 +1043,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         unlisten = fn;
       });
     return () => unlisten?.();
-  }, [refetchAccount, refetchSkills, computeContextUsage, refetchQueue]);
+  }, [refetchAccount, refetchSkills, refetchApps, computeContextUsage, refetchQueue]);
 
   useEffect(() => {
     refetchAccount();
@@ -1136,8 +1168,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       attachments: ComposerAttachment[] = [],
       skills: ComposerSkill[] = [],
       fileRefs: ComposerFileRef[] = [],
+      mentions: ComposerMention[] = [],
     ) => {
-      await api.sendTurn(threadId, text, attachments, skills, fileRefs);
+      await api.sendTurn(threadId, text, attachments, skills, fileRefs, mentions);
     },
     [],
   );
@@ -1173,8 +1206,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       attachments: ComposerAttachment[] = [],
       skills: ComposerSkill[] = [],
       fileRefs: ComposerFileRef[] = [],
+      mentions: ComposerMention[] = [],
     ) => {
-      await api.queueAdd(threadId, text, attachments, skills, fileRefs);
+      await api.queueAdd(threadId, text, attachments, skills, fileRefs, mentions);
     },
     [],
   );
@@ -1609,6 +1643,7 @@ function handleEvent(
 interface NotificationEffects {
   refetchAccount: () => void;
   refetchSkills: () => void;
+  refetchApps: () => void;
   /// Token usage arrives as raw counts; turning them into a percentage is
   /// engine arithmetic, so it round-trips to Rust rather than being computed
   /// here (ADR-0021). One call per usage notification, which fires per turn,
@@ -1721,6 +1756,13 @@ function handleNotification(
   // changed, never which, so the only correct response is a re-list.
   if (method === "skills/changed") {
     effects.refetchSkills();
+    return;
+  }
+  // `AppListUpdatedNotification` carries the full list, but it is the
+  // *unfiltered* catalog; re-listing keeps one code path deciding what is
+  // mentionable.
+  if (method === "app/list/updated") {
+    effects.refetchApps();
     return;
   }
 

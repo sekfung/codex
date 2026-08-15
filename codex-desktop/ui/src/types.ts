@@ -649,6 +649,57 @@ export interface ComposerFileRef {
   path: string;
 }
 
+/// An app or plugin referenced from the `@` menu's 插件 section.
+///
+/// Unlike a file, these *are* structured mentions. The `app://` / `plugin://`
+/// URI the engine matches on is built in Rust (`src/composer.rs`), not here —
+/// a wrong prefix does not error, it silently fails to resolve.
+export type ComposerMention =
+  | { kind: "app"; id: string; name: string }
+  | { kind: "plugin"; id: string; name: string };
+
+// -- Apps (`app/list`) -------------------------------------------------------
+
+/// `v2::AppInfo`, narrowed to what the `@` menu renders.
+///
+/// `isAccessible`/`isEnabled` are the engine's own mentionability gate
+/// (`tui/src/chatwidget/skills.rs::is_app_mentionable`), not a display
+/// preference.
+export interface AppInfo {
+  id: string;
+  name: string;
+  description?: string | null;
+  isAccessible: boolean;
+  isEnabled: boolean;
+}
+
+export interface AppsListResponse {
+  data: AppInfo[];
+  nextCursor?: string | null;
+}
+
+// -- External agent import (`externalAgentConfig/*`) -------------------------
+// Flattened by `detect_external_agent_config` in `src/integrations.rs`, which
+// keeps each item's original server object in `raw` for echo-back:
+// `ExternalAgentConfigMigrationItemType` is SCREAMING_CASE among camelCase
+// siblings, so the frontend never constructs it.
+
+export interface DetectedMigrationItem {
+  itemType: string;
+  description: string;
+  /// Null/empty means home-scoped; non-empty means repo-scoped.
+  cwd?: string | null;
+  raw: unknown;
+}
+
+export interface DetectedMigrationSource {
+  /// Passed back to import unchanged, as the protocol requires.
+  source: string;
+  label: string;
+  items: DetectedMigrationItem[];
+  error?: string | null;
+}
+
 // -- Collaboration modes (`collaborationMode/list`) --------------------------
 // Flattened by `list_collaboration_modes` in `src/composer.rs`. The wire type
 // `v2::CollaborationModeMask` carries `#[serde(rename = "reasoning_effort")]`
