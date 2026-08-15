@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { FileDiff, KeyRound, MessageCircleQuestion, Terminal } from "lucide-react";
 
 import { useStore } from "../store";
@@ -11,7 +11,10 @@ import type {
   PendingCommandExecutionApproval,
   PendingFileChangeApproval,
   PendingPermissionsApproval,
+  PendingElicitationRequest,
   PendingUserInputRequest,
+  ElicitationAnswer,
+  ElicitationView,
   PermissionProfile,
   UserInputAnswerDraft,
 } from "../types";
@@ -55,7 +58,240 @@ export function ApprovalCard({ approval }: { approval: PendingApproval }) {
   if (approval.kind === "userInput") {
     return <UserInputRequestCard request={approval} {...shared} />;
   }
+  if (approval.kind === "elicitation") {
+    return <ElicitationCard request={approval} {...shared} />;
+  }
   return <PermissionsApproval approval={approval} {...shared} />;
+}
+
+/// `mcpServer/elicitation/request`: an MCP server asking the user to fill in a
+/// form, confirm, or visit a URL.
+///
+/// The schema arrives as a deeply nested untagged union; `elicitation_view`
+/// flattens it in Rust so this component only ever sees a list of controls.
+/// Answers go back the same way — Rust types each one from its declared
+/// control, because a number field must send `3` and not `"3"`.
+function ElicitationCard({
+  request,
+  busy,
+  error,
+  resolve,
+}: DecisionProps & { request: PendingElicitationRequest }) {
+  const [view, setView] = useState<ElicitationView | null>(null);
+  const [viewError, setViewError] = useState<string | null>(null);
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [checks, setChecks] = useState<Record<string, boolean>>({});
+  const [multi, setMulti] = useState<Record<string, string[]>>({});
+
+  useEffect(() => {
+    let ignore = false;
+    api
+      .elicitationView(request.params)
+      .then((next) => {
+        if (ignore) return;
+        setView(next);
+        // Seed defaults so the form starts where the server suggested.
+        const seedValues: Record<string, string> = {};
+        const seedChecks: Record<string, boolean> = {};
+        const seedMulti: Record<string, string[]> = {};
+        for (const field of next.fields) {
+          const control = field.control;
+          if (control.kind === "boolean") seedChecks[field.key] = control.default ?? false;
+          else if (control.kind === "multiSelect") seedMulti[field.key] = control.default ?? [];
+          else if (control.kind === "number")
+            seedValues[field.key] = control.default == null ? "" : String(control.default);
+          else seedValues[field.key] = control.default ?? "";
+        }
+        setValues(seedValues);
+        setChecks(seedChecks);
+        setMulti(seedMulti);
+      })
+      .catch((err) => {
+        if (ignore) return;
+        // Still answerable: decline/cancel don't need the form.
+        setViewError(String(err));
+      });
+    return () => {
+      ignore = true;
+    };
+  }, [request.params]);
+
+  const fields = view?.fields ?? [];
+  const answers: ElicitationAnswer[] = fields.map((field) => ({
+    key: field.key,
+    value: values[field.key] ?? null,
+    checked: checks[field.key] ?? null,
+    values: multi[field.key] ?? null,
+  }));
+
+  const canAccept =
+    view !== null &&
+    !view.unrenderableReason &&
+    fields.every((field) => {
+      if (!field.required) return true;
+      const control = field.control;
+      if (control.kind === "boolean") return true;
+      if (control.kind === "multiSelect") return (multi[field.key] ?? []).length > 0;
+      return (values[field.key] ?? "").trim() !== "";
+    });
+
+  function toggleMulti(key: string, value: string) {
+    setMulti((current) => {
+      const chosen = current[key] ?? [];
+      return {
+        ...current,
+        [key]: chosen.includes(value)
+          ? chosen.filter((entry) => entry !== value)
+          : [...chosen, value],
+      };
+    });
+  }
+
+  return (
+    <CardShell
+      Icon={MessageCircleQuestion}
+      title={<>MCP 服务器请求输入{request.serverName ? `：${request.serverName}` : ""}</>}
+    >
+      {view && <div className="text-[13px]">{view.message}</div>}
+      {viewError && <Detail>无法解析该请求的表单：{viewError}</Detail>}
+      {view?.unrenderableReason && <Detail>{view.unrenderableReason}</Detail>}
+
+      {view?.mode === "url" && view.url && (
+        <Detail>
+          请先访问{" "}
+          <button
+            type="button"
+            className="text-primary underline underline-offset-2"
+            onClick={() => void api.openPathInOs(view.url as string)}
+          >
+            {view.url}
+          </button>
+          ，完成后再确认。
+        </Detail>
+      )}
+
+      {fields.length > 0 && (
+        <div className="mt-2 flex flex-col gap-3">
+          {fields.map((field) => (
+            <div key={field.key} className="flex flex-col gap-1.5">
+              <div>
+                <div className="text-[13px] font-medium">
+                  {field.label}
+                  {field.required && <span className="ml-1 text-destructive">*</span>}
+                </div>
+                {field.description && (
+                  <div className="text-xs text-muted-foreground">{field.description}</div>
+                )}
+              </div>
+
+              {field.control.kind === "boolean" ? (
+                <label className="flex items-center gap-2 text-[13px]">
+                  <input
+                    type="checkbox"
+                    disabled={busy}
+                    checked={checks[field.key] ?? false}
+                    onChange={(event) =>
+                      setChecks((current) => ({ ...current, [field.key]: event.target.checked }))
+                    }
+                  />
+                  是
+                </label>
+              ) : field.control.kind === "select" ? (
+                <div className="flex flex-wrap gap-1.5">
+                  {field.control.options.map((option) => {
+                    const active = values[field.key] === option.value;
+                    return (
+                      <Button
+                        key={option.value}
+                        size="sm"
+                        variant={active ? "default" : "outline"}
+                        disabled={busy}
+                        onClick={() =>
+                          setValues((current) => ({
+                            ...current,
+                            [field.key]: active ? "" : option.value,
+                          }))
+                        }
+                      >
+                        {option.label}
+                      </Button>
+                    );
+                  })}
+                </div>
+              ) : field.control.kind === "multiSelect" ? (
+                <div className="flex flex-wrap gap-1.5">
+                  {field.control.options.map((option) => {
+                    const active = (multi[field.key] ?? []).includes(option.value);
+                    return (
+                      <Button
+                        key={option.value}
+                        size="sm"
+                        variant={active ? "default" : "outline"}
+                        disabled={busy}
+                        onClick={() => toggleMulti(field.key, option.value)}
+                      >
+                        {option.label}
+                      </Button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <input
+                  type={field.control.kind === "number" ? "number" : "text"}
+                  step={
+                    field.control.kind === "number" && field.control.integer ? 1 : undefined
+                  }
+                  value={values[field.key] ?? ""}
+                  disabled={busy}
+                  className="h-8 w-full rounded-md border border-input bg-background px-2 text-[13px] placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  onChange={(event) =>
+                    setValues((current) => ({ ...current, [field.key]: event.target.value }))
+                  }
+                />
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <Actions>
+        <Button
+          size="sm"
+          disabled={busy || !canAccept}
+          onClick={() =>
+            resolve(() =>
+              api.resolveElicitation(request.requestId, "accept", fields, answers),
+            )
+          }
+        >
+          确认
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={busy}
+          title="拒绝本次请求，但不中断当前回合"
+          onClick={() =>
+            resolve(() => api.resolveElicitation(request.requestId, "decline", [], []))
+          }
+        >
+          拒绝
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={busy}
+          title="取消本次请求"
+          onClick={() =>
+            resolve(() => api.resolveElicitation(request.requestId, "cancel", [], []))
+          }
+        >
+          取消
+        </Button>
+      </Actions>
+      <CardError error={error} />
+    </CardShell>
+  );
 }
 
 interface DecisionProps {

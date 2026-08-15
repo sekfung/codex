@@ -5,6 +5,7 @@ import { ThemeProvider } from "./useTheme";
 import { Sidebar } from "./components/Sidebar";
 import { ChatStream } from "./components/ChatStream";
 import { Composer } from "./components/Composer";
+import { NoticeBar } from "./components/NoticeBar";
 import { UsageNotice } from "./components/UsageNotice";
 import { SettingsShell } from "./components/settings/SettingsShell";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -19,6 +20,11 @@ function MainPane() {
         <MessagesSquare className="size-8 text-muted-foreground" />
         <p className="text-xl font-medium tracking-tight">Codex</p>
         <p className="text-sm text-muted-foreground">从左侧选择一个项目对话，或新建一个。</p>
+        {/* configWarning/deprecationNotice arrive with no thread attached, so
+            they must be visible before any conversation is open. */}
+        <div className="w-full pt-4">
+          <NoticeBar />
+        </div>
       </main>
     );
   }
@@ -26,6 +32,7 @@ function MainPane() {
   return (
     <main className="flex min-w-0 flex-1 flex-col">
       <ChatStream threadId={threadId} />
+      <NoticeBar />
       <UsageNotice />
       <Composer threadId={threadId} />
     </main>

@@ -28,6 +28,7 @@ import type {
   McpServerRuntimeState,
   Model,
   ModelSelection,
+  Notice,
   PendingApproval,
   PendingCommandExecutionApproval,
   PendingLogin,
@@ -181,6 +182,11 @@ interface State {
   /// Whether the settings surface is open, and on which screen (ADR: the
   /// Official App shows settings as a full-window takeover, not a modal).
   settingsScreen: string | null;
+  /// Server-pushed notices the user should see: `warning`, `error`,
+  /// `guardianWarning`, `configWarning`, `deprecationNotice`, `model/rerouted`.
+  /// All were previously discarded, so a bad config or a silently swapped
+  /// model produced no visible sign at all.
+  notices: Notice[];
   /// Model catalog from `model/list`, loaded once at startup. Empty until it
   /// resolves (or if it fails — the picker then simply has nothing to offer,
   /// which is better than blocking the composer).
@@ -291,6 +297,8 @@ type Action =
     }
   | { type: "CONFIG_REQUIREMENTS_LOADED"; requirements: ConfigRequirements | null }
   | { type: "SETTINGS_SCREEN_SET"; screen: string | null }
+  | { type: "NOTICE_PUSHED"; notice: Notice }
+  | { type: "NOTICE_DISMISSED"; id: string }
   | { type: "MCP_RUNTIME_UPDATED"; name: string; runtime: McpServerRuntimeState }
   | { type: "LOGIN_STARTED"; login: PendingLogin }
   | { type: "LOGIN_COMPLETED"; error: string | null };
@@ -724,6 +732,17 @@ function reducer(state: State, action: Action): State {
       return { ...state, configRequirements: action.requirements };
     case "SETTINGS_SCREEN_SET":
       return { ...state, settingsScreen: action.screen };
+    case "NOTICE_PUSHED": {
+      // Bounded: a server that emits warnings in a loop must not grow this
+      // without limit. Newest first, since that is what a user looks at.
+      const notices = [action.notice, ...state.notices].slice(0, 20);
+      return { ...state, notices };
+    }
+    case "NOTICE_DISMISSED":
+      return {
+        ...state,
+        notices: state.notices.filter((notice) => notice.id !== action.id),
+      };
     case "MCP_RUNTIME_UPDATED":
       return {
         ...state,
@@ -768,6 +787,7 @@ const initialState: State = {
   configOrigins: {},
   configRequirements: null,
   settingsScreen: null,
+  notices: [],
   models: [],
   // Null until `model/list` or `config/read` resolves; null means "let the
   // server decide".
@@ -1944,7 +1964,108 @@ function handleNotification(
               failureReason: null,
             },
     });
+    return;
   }
+
+  // --- Notices -------------------------------------------------------------
+  // These were all previously discarded. A malformed config, a guardian
+  // warning, or a silently substituted model left no trace in the UI at all.
+  if (method === "warning") {
+    pushNotice(dispatch, {
+      severity: "warning",
+      source: method,
+      message: String(p.message ?? ""),
+      threadId: p.threadId == null ? null : String(p.threadId),
+    });
+    return;
+  }
+  if (method === "guardianWarning") {
+    pushNotice(dispatch, {
+      severity: "warning",
+      source: method,
+      message: String(p.message ?? ""),
+      threadId: String(p.threadId ?? ""),
+    });
+    return;
+  }
+  if (method === "error") {
+    // `willRetry` errors are transient and do not interrupt the turn, so they
+    // are informational rather than failures the user must act on.
+    const willRetry = p.willRetry === true;
+    const error = p.error as { message?: string } | undefined;
+    pushNotice(dispatch, {
+      severity: willRetry ? "info" : "error",
+      source: method,
+      message: error?.message ?? "Codex 报告了一个错误",
+      details: willRetry ? "这是暂时性错误，Codex 会自动重试。" : null,
+      threadId: String(p.threadId ?? ""),
+    });
+    return;
+  }
+  if (method === "configWarning") {
+    pushNotice(dispatch, {
+      severity: "warning",
+      source: method,
+      message: String(p.summary ?? ""),
+      // The path matters here: a config warning the user can't locate is
+      // hard to act on.
+      details: [p.details, p.path].filter(Boolean).join(" — ") || null,
+    });
+    return;
+  }
+  if (method === "deprecationNotice") {
+    pushNotice(dispatch, {
+      severity: "info",
+      source: method,
+      message: String(p.summary ?? ""),
+      details: p.details == null ? null : String(p.details),
+    });
+    return;
+  }
+  if (method === "model/rerouted") {
+    // The model changed under the user. The composer still shows what they
+    // picked, so without this there is no sign at all that a different model
+    // answered.
+    pushNotice(dispatch, {
+      severity: "info",
+      source: method,
+      message: `模型已切换：${String(p.fromModel ?? "")} → ${String(p.toModel ?? "")}`,
+      details: p.reason == null ? null : String(p.reason),
+      threadId: String(p.threadId ?? ""),
+    });
+    return;
+  }
+
+  // --- Notifications belonging to features this client already ships -------
+  if (method === "thread/reverted") {
+    // Revert triggered from elsewhere — the CLI shares this $CODEX_HOME
+    // (ADR-0008), so history can be rewritten without this client asking.
+    // `revertThread` already reloads after its own call; this covers the rest.
+    // Clear first: `HISTORY_LOADED` merges, so the dropped turns would
+    // otherwise linger on screen.
+    const threadId = String(p.threadId);
+    dispatch({ type: "HISTORY_CLEARED", threadId });
+    void api
+      .resumeThread(threadId)
+      .then((response) =>
+        dispatch({ type: "HISTORY_LOADED", threadId, turns: response.thread?.turns ?? [] }),
+      )
+      .catch((error) =>
+        dispatch({ type: "HISTORY_FAILED", threadId, error: String(error) }),
+      );
+    return;
+  }
+}
+
+/// Notices carry no server-side id, so one is minted here for dismissal.
+function pushNotice(
+  dispatch: React.Dispatch<Action>,
+  notice: Omit<Notice, "id"> & { details?: string | null; threadId?: string | null },
+) {
+  dispatch({
+    type: "NOTICE_PUSHED",
+    notice: { ...notice, id: `${notice.source}-${Date.now()}-${Math.random()}` },
+  });
 }
 
 function handleServerRequest(
@@ -1956,7 +2077,11 @@ function handleServerRequest(
   const base = {
     requestId,
     threadId: String(p.threadId),
-    turnId: String(p.turnId),
+    // Nullable on elicitations: MCP models them as standalone server-to-client
+    // requests, so app-server can only attach a turn when it managed to
+    // correlate one. `String(undefined)` would put the literal "undefined"
+    // here and silently key the card to a turn that doesn't exist.
+    turnId: p.turnId == null ? "" : String(p.turnId),
     itemId: String(p.itemId ?? ""),
   };
   if (request.method === "item/commandExecution/requestApproval") {
@@ -2019,9 +2144,25 @@ function handleServerRequest(
         isBlocking: p.isBlocking === undefined ? true : Boolean(p.isBlocking),
       },
     });
+  } else if (request.method === "mcpServer/elicitation/request") {
+    // An MCP server asking the user for input. Blocks the turn like the
+    // approvals do; the form schema is flattened by Rust (`elicitation_view`)
+    // rather than parsed here.
+    dispatch({
+      type: "APPROVAL_REQUESTED",
+      threadId: base.threadId,
+      approval: {
+        ...base,
+        kind: "elicitation",
+        serverName: String(p.serverName ?? ""),
+        params: p,
+      },
+    });
   } else {
-    // Better a console warning than a turn that hangs with no explanation.
-    tracingWarn(`unhandled server request: ${request.method}`);
+    // The bridge answers anything unrecognized before it ever reaches the
+    // webview (`src/server_requests.rs`), so this is a "we forgot to render
+    // something the router forwards" bug, not a hang.
+    tracingWarn(`unhandled server request forwarded by the bridge: ${request.method}`);
   }
 }
 

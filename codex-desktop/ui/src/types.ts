@@ -508,11 +508,105 @@ export interface UserInputAnswerDraft {
   note?: string | null;
 }
 
+/// A server-pushed notice the user should see.
+///
+/// Covers `warning`, `error`, `guardianWarning`, `configWarning`,
+/// `deprecationNotice` and `model/rerouted` — all notifications that were
+/// previously dropped on the floor, so a malformed config or a silently
+/// substituted model left no trace in the UI at all.
+export interface Notice {
+  /// Client-side id, for dismissal. The protocol carries no notice id.
+  id: string;
+  severity: "info" | "warning" | "error";
+  /// Which notification produced it, so the source stays identifiable.
+  source: string;
+  message: string;
+  details?: string | null;
+  threadId?: string | null;
+}
+
+/// One control in an elicitation form, already flattened by Rust.
+///
+/// The wire schema is four `#[serde(untagged)]` layers deep with renamed
+/// fields throughout; `src/elicitation.rs` collapses it so nothing here has to
+/// know that shape. These values round-trip back unchanged when answering, so
+/// Rust can type each answer from its declared control.
+export type ElicitationControl =
+  | {
+      kind: "text";
+      default?: string | null;
+      format?: string | null;
+      minLength?: number | null;
+      maxLength?: number | null;
+    }
+  | {
+      kind: "number";
+      integer: boolean;
+      default?: number | null;
+      minimum?: number | null;
+      maximum?: number | null;
+    }
+  | { kind: "boolean"; default?: boolean | null }
+  | { kind: "select"; options: ElicitationOption[]; default?: string | null }
+  | {
+      kind: "multiSelect";
+      options: ElicitationOption[];
+      default: string[];
+      minItems?: number | null;
+      maxItems?: number | null;
+    };
+
+export interface ElicitationOption {
+  value: string;
+  label: string;
+}
+
+export interface ElicitationField {
+  key: string;
+  label: string;
+  description?: string | null;
+  required: boolean;
+  control: ElicitationControl;
+}
+
+export interface ElicitationView {
+  message: string;
+  mode: string;
+  url?: string | null;
+  fields: ElicitationField[];
+  /// Set when the form cannot be rendered by this build. The card explains it
+  /// and offers only decline/cancel rather than pretending to collect input.
+  unrenderableReason?: string | null;
+}
+
+/// One answer as the UI collects it. Rust types it against the field's
+/// declared control before sending — a number field must answer `3`, not
+/// `"3"`, or a server validating its own schema rejects the response.
+export interface ElicitationAnswer {
+  key: string;
+  value?: string | null;
+  checked?: boolean | null;
+  values?: string[] | null;
+}
+
+/// `mcpServer/elicitation/request` — an MCP server asking the user for input.
+///
+/// Same class as the tool user-input request: a server request that blocks
+/// until this client answers, so it shares the pending list and therefore the
+/// composer's pending-decision affordance (ADR-0016).
+export interface PendingElicitationRequest extends PendingApprovalBase {
+  kind: "elicitation";
+  serverName: string;
+  /// Raw params, handed back to `elicitation_view` for flattening.
+  params: Record<string, unknown>;
+}
+
 export type PendingApproval =
   | PendingCommandExecutionApproval
   | PendingFileChangeApproval
   | PendingPermissionsApproval
-  | PendingUserInputRequest;
+  | PendingUserInputRequest
+  | PendingElicitationRequest;
 
 /// What `submit_turn` did with a message. Steering is not a separate user
 /// intent in the engine's model — the client picks steer/start/queue from live

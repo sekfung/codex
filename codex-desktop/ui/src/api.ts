@@ -42,6 +42,9 @@ import type {
   ThreadSearchResponse,
   TokenBudgetEdit,
   TurnSubmission,
+  ElicitationAnswer,
+  ElicitationField,
+  ElicitationView,
   UserInputAnswerDraft,
 } from "./types";
 
@@ -340,6 +343,21 @@ export const resolveUserInputRequest = (
   requestId: unknown,
   answers: UserInputAnswerDraft[],
 ) => invoke<void>("resolve_user_input_request", { requestId, answers });
+
+/// Flattens an MCP elicitation's form schema into renderable fields. Done in
+/// Rust because the schema is a deeply nested untagged union with renamed
+/// fields — see `src/elicitation.rs`.
+export const elicitationView = (params: Record<string, unknown>) =>
+  invoke<ElicitationView>("elicitation_view", { params });
+
+/// Answers `mcpServer/elicitation/request`. `fields` go back so Rust can type
+/// each answer from its declared control; `content` is only sent on accept.
+export const resolveElicitation = (
+  requestId: unknown,
+  action: "accept" | "decline" | "cancel",
+  fields: ElicitationField[],
+  answers: ElicitationAnswer[],
+) => invoke<void>("resolve_elicitation", { requestId, action, fields, answers });
 
 // -- MCP servers / hooks / plugins / account (settings 集成 + 编码 screens) ---
 // All of these are thin client calls onto app-server RPCs (ADR-0021).

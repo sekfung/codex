@@ -13,9 +13,11 @@ mod bridge;
 mod commands;
 mod composer;
 mod config_settings;
+mod elicitation;
 mod integrations;
 mod memories;
 mod projects;
+mod server_requests;
 mod thread_ops;
 mod user_input;
 
@@ -262,6 +264,8 @@ fn main() {
             thread_ops::goal_clear,
             thread_ops::revert_thread,
             user_input::resolve_user_input_request,
+            elicitation::elicitation_view,
+            elicitation::resolve_elicitation,
             commands::interrupt_turn,
             commands::resolve_command_execution_approval,
             commands::resolve_file_change_approval,

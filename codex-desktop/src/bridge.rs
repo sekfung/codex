@@ -203,7 +203,7 @@ async fn run_bridge_loop(
                     tracing::warn!("app-server in-process event stream ended");
                     return;
                 };
-                emit_event(&app_handle, event.into());
+                handle_event(&client, &app_handle, event.into()).await;
             }
         }
     }
@@ -263,6 +263,51 @@ async fn handle_job(client: &InProcessAppServerClient, job: BridgeJob) {
             let _ = respond_to.send(outcome);
         }
     }
+}
+
+/// Handles one server-initiated event.
+///
+/// Server *requests* are routed first (see [`crate::server_requests`]): the
+/// engine blocks on them, so one that reaches neither a responder here nor
+/// the frontend is a deadlock. Routing happens in Rust, before the webview is
+/// involved at all, so a slow, reloading or wedged frontend cannot be what
+/// stands between the engine and a response.
+///
+/// A request is answered here *or* emitted, never both — the routing enum's
+/// variants are mutually exclusive, so there is no path on which two
+/// responses are produced for one id.
+async fn handle_event(
+    client: &InProcessAppServerClient,
+    app_handle: &AppHandle,
+    event: codex_app_server_client::AppServerEvent,
+) {
+    use crate::server_requests::ServerRequestRouting;
+    use codex_app_server_client::AppServerEvent;
+
+    if let AppServerEvent::ServerRequest(request) = &event {
+        let request_id = request.id().clone();
+        match crate::server_requests::route(request) {
+            ServerRequestRouting::Frontend => {}
+            ServerRequestRouting::AnswerHere(result) => {
+                if let Err(err) = client.resolve_server_request(request_id, result).await {
+                    tracing::error!(%err, "failed to answer server request in-process");
+                }
+                return;
+            }
+            ServerRequestRouting::Reject(error) => {
+                tracing::warn!(
+                    method = %crate::server_requests::method_name(request),
+                    "rejecting unserviceable server request"
+                );
+                if let Err(err) = client.reject_server_request(request_id, error).await {
+                    tracing::error!(%err, "failed to reject unserviceable server request");
+                }
+                return;
+            }
+        }
+    }
+
+    emit_event(app_handle, event);
 }
 
 /// Forwards a server-initiated event to the frontend. Notifications and
