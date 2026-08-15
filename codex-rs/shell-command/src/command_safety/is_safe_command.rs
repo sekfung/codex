@@ -156,6 +156,9 @@ fn is_safe_to_call_with_exec(command: &[String]) -> bool {
         // Git
         Some("git") => is_safe_git_command(command),
 
+        // Subversion
+        Some("svn") => is_safe_svn_command(command),
+
         // Special-case `sed -n {N|M,N}p`
         Some("sed")
             if {
@@ -197,6 +200,115 @@ pub(crate) fn is_safe_git_command(command: &[String]) -> bool {
             false
         }
     }
+}
+
+/// Read-only Subversion subcommands, including the aliases `svn` accepts.
+///
+/// Aliases are listed explicitly rather than normalized because the allowlist
+/// must fail closed: an alias nobody enumerated (`ci` for `commit`, `co` for
+/// `checkout`) simply does not match and falls through to "not safe".
+const READ_ONLY_SVN_SUBCOMMANDS: &[&str] = &[
+    "annotate", "ann", "blame", "praise", // all four are the same command
+    "cat", "diff", "di", "info", "list", "ls", "log", "plist", "pl", "proplist", "pget", "pg",
+    "propget", "status", "stat", "st",
+];
+
+/// Options that make an otherwise read-only `svn` invocation unsafe.
+///
+/// The first three are Subversion's equivalent of git's `--ext-diff`: they name
+/// a program for `svn` to execute. `--config-dir`/`--config-option` are worse
+/// than they look, because a config override can itself set `diff-cmd` — so
+/// blocking the direct spellings without blocking config injection would leave
+/// the hole open. `--extensions` is forwarded verbatim to the diff program.
+///
+/// The credential and certificate options are refused for a different reason:
+/// they do not modify the repository, but they put secrets on a command line
+/// this agent logs, or disable the TLS verification that makes a fetch
+/// trustworthy. Neither belongs in a silently auto-approved command.
+const UNSAFE_SVN_OPTIONS: &[GitOptionPattern] = &[
+    GitOptionPattern::Exact("--diff-cmd"),
+    GitOptionPattern::Prefix("--diff-cmd="),
+    GitOptionPattern::Exact("--diff3-cmd"),
+    GitOptionPattern::Prefix("--diff3-cmd="),
+    GitOptionPattern::Exact("--editor-cmd"),
+    GitOptionPattern::Prefix("--editor-cmd="),
+    GitOptionPattern::Exact("--config-dir"),
+    GitOptionPattern::Prefix("--config-dir="),
+    GitOptionPattern::Exact("--config-option"),
+    GitOptionPattern::Prefix("--config-option="),
+    GitOptionPattern::Exact("--extensions"),
+    GitOptionPattern::Prefix("--extensions="),
+    GitOptionPattern::Exact("-x"),
+    GitOptionPattern::ShortWithInlineValue("-x"),
+    GitOptionPattern::Exact("--username"),
+    GitOptionPattern::Prefix("--username="),
+    GitOptionPattern::Exact("--password"),
+    GitOptionPattern::Prefix("--password="),
+    GitOptionPattern::Exact("--password-from-stdin"),
+    GitOptionPattern::Exact("--trust-server-cert"),
+    GitOptionPattern::Exact("--trust-server-cert-failures"),
+    GitOptionPattern::Prefix("--trust-server-cert-failures="),
+];
+
+/// Repository URL schemes `svn` accepts as an operand.
+const SVN_URL_SCHEMES: &[&str] = &["http://", "https://", "svn://", "svn+ssh://", "file://"];
+
+/// Whether an argument addresses a repository over the network rather than the
+/// working copy in front of us.
+fn is_svn_url(arg: &str) -> bool {
+    SVN_URL_SCHEMES.iter().any(|scheme| arg.starts_with(scheme))
+}
+
+/// Read-only Subversion commands, the counterpart of [`is_safe_git_command`].
+///
+/// The shape mirrors the git classifier — allowlist the subcommand, then refuse
+/// anything in the argument list that could turn a read into something else —
+/// but two differences are deliberate and neither is cosmetic.
+///
+/// **Subversion's reads reach the network.** `svn` keeps no local history, so
+/// `log`, `info` and revision-ranged `diff` contact the repository server where
+/// their git equivalents stay on disk. That alone is not disqualifying:
+/// consulting the repository a working copy already points at is the ordinary
+/// way to read Subversion, and refusing it would auto-approve nothing useful.
+/// What *is* refused is an explicit URL operand, because
+/// `svn log https://elsewhere/repo` is not an inspection of the checkout in
+/// front of the agent — it is a fetch from a server the user never named, and
+/// that is a different act requiring a different answer.
+///
+/// **Options come after the subcommand.** Unlike git, `svn` takes essentially
+/// all of its options positionally after the verb, so there is no global/
+/// subcommand split to police separately; every argument is checked the same
+/// way.
+pub(crate) fn is_safe_svn_command(command: &[String]) -> bool {
+    let Some(cmd0) = command.first().map(String::as_str) else {
+        return false;
+    };
+    if executable_name_lookup_key(cmd0).as_deref() != Some("svn") {
+        return false;
+    }
+
+    // The subcommand is the first bare word. Anything before it is an option,
+    // and options are vetted below along with everything else.
+    let Some(subcommand) = command
+        .iter()
+        .skip(1)
+        .map(String::as_str)
+        .find(|arg| !arg.starts_with('-'))
+    else {
+        // `svn` with no subcommand prints usage, but so does `svn --version`;
+        // neither reads a repository, and neither is worth allowlisting.
+        return false;
+    };
+
+    if !READ_ONLY_SVN_SUBCOMMANDS.contains(&subcommand) {
+        return false;
+    }
+
+    !command
+        .iter()
+        .skip(1)
+        .map(String::as_str)
+        .any(|arg| is_svn_url(arg) || git_matches_option_pattern(arg, UNSAFE_SVN_OPTIONS))
 }
 
 // Treat `git branch` as safe only when the arguments clearly indicate
@@ -523,6 +635,139 @@ mod tests {
             "bash",
             "-lc",
             "git --git-dir=.evil-git diff HEAD~1..HEAD",
+        ])));
+    }
+
+    #[test]
+    fn svn_read_only_subcommands_and_aliases_are_safe() {
+        for argv in [
+            vec!["svn", "status"],
+            vec!["svn", "st"],
+            vec!["svn", "stat"],
+            vec!["svn", "info"],
+            vec!["svn", "log"],
+            vec!["svn", "diff"],
+            vec!["svn", "di"],
+            vec!["svn", "cat", "src/main.rs"],
+            vec!["svn", "ls"],
+            vec!["svn", "blame", "src/main.rs"],
+            vec!["svn", "praise", "src/main.rs"],
+            vec!["svn", "proplist"],
+            vec!["svn", "pg", "svn:ignore"],
+            vec!["svn", "status", "--xml"],
+            vec!["svn", "diff", "-r", "100:200"],
+        ] {
+            assert!(
+                is_safe_to_call_with_exec(&vec_str(&argv)),
+                "expected safe: {argv:?}"
+            );
+        }
+    }
+
+    /// The allowlist must fail closed on every mutating verb, including the
+    /// two-letter aliases that are easy to overlook: `ci` commits and `co`
+    /// checks out.
+    #[test]
+    fn svn_mutating_subcommands_are_not_safe() {
+        for argv in [
+            vec!["svn", "commit"],
+            vec!["svn", "ci"],
+            vec!["svn", "checkout", "https://example.com/repo"],
+            vec!["svn", "co", "https://example.com/repo"],
+            vec!["svn", "update"],
+            vec!["svn", "up"],
+            vec!["svn", "add", "file.txt"],
+            vec!["svn", "delete", "file.txt"],
+            vec!["svn", "revert", "file.txt"],
+            vec!["svn", "merge"],
+            vec!["svn", "switch"],
+            vec!["svn", "propset", "svn:ignore", "target"],
+            vec!["svn"],
+        ] {
+            assert!(
+                !is_safe_to_call_with_exec(&vec_str(&argv)),
+                "expected unsafe: {argv:?}"
+            );
+        }
+    }
+
+    /// Subversion reads reach the network, which is fine against the working
+    /// copy's own repository and not fine against a server named on the command
+    /// line. A URL operand is the difference.
+    #[test]
+    fn svn_url_operands_are_not_safe() {
+        for argv in [
+            vec!["svn", "log", "https://example.com/repo"],
+            vec!["svn", "info", "svn://example.com/repo"],
+            vec!["svn", "cat", "svn+ssh://example.com/repo/file"],
+            vec!["svn", "ls", "http://example.com/repo"],
+            vec!["svn", "diff", "file:///tmp/repo"],
+        ] {
+            assert!(
+                !is_safe_to_call_with_exec(&vec_str(&argv)),
+                "expected unsafe: {argv:?}"
+            );
+        }
+    }
+
+    /// `--diff-cmd` names a program to run. `--config-option` can set the same
+    /// thing indirectly, so blocking only the direct spelling would leave the
+    /// hole open.
+    #[test]
+    fn svn_options_that_execute_programs_are_not_safe() {
+        for argv in [
+            vec!["svn", "diff", "--diff-cmd", "/bin/sh"],
+            vec!["svn", "diff", "--diff-cmd=/bin/sh"],
+            vec!["svn", "diff", "--diff3-cmd", "/bin/sh"],
+            vec!["svn", "log", "--editor-cmd", "/bin/sh"],
+            vec![
+                "svn",
+                "diff",
+                "--config-option",
+                "config:helpers:diff-cmd=/bin/sh",
+            ],
+            vec!["svn", "diff", "--config-dir", "/tmp/evil"],
+            vec!["svn", "diff", "-x", "-w"],
+            vec!["svn", "diff", "--extensions", "-w"],
+        ] {
+            assert!(
+                !is_safe_to_call_with_exec(&vec_str(&argv)),
+                "expected unsafe: {argv:?}"
+            );
+        }
+    }
+
+    /// Credentials on a logged command line, and disabled certificate checks,
+    /// are refused even though neither writes to the repository.
+    #[test]
+    fn svn_credential_and_certificate_options_are_not_safe() {
+        for argv in [
+            vec!["svn", "log", "--username", "alice"],
+            vec!["svn", "log", "--password", "hunter2"],
+            vec!["svn", "log", "--password-from-stdin"],
+            vec!["svn", "info", "--trust-server-cert"],
+            vec!["svn", "info", "--trust-server-cert-failures=unknown-ca"],
+        ] {
+            assert!(
+                !is_safe_to_call_with_exec(&vec_str(&argv)),
+                "expected unsafe: {argv:?}"
+            );
+        }
+    }
+
+    /// An option preceding the subcommand must not hide the verb from the
+    /// allowlist check.
+    #[test]
+    fn svn_options_before_the_subcommand_do_not_mask_it() {
+        assert!(is_safe_to_call_with_exec(&vec_str(&[
+            "svn",
+            "--non-interactive",
+            "status"
+        ])));
+        assert!(!is_safe_to_call_with_exec(&vec_str(&[
+            "svn",
+            "--non-interactive",
+            "commit"
         ])));
     }
 
