@@ -49,6 +49,7 @@ tracing-subscriber = { workspace = true }
 # `thread/queue/add` requires a client message id; v7 matches what the queue
 # extension mints server-side (`ext/queue/Cargo.toml`).
 uuid = { workspace = true, features = ["v7"] }
+tauri-plugin-updater = "2.10.1"
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

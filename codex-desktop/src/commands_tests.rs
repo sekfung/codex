@@ -132,3 +132,63 @@ fn unexpressible_thread_settings_yield_no_approval_mode() {
 
     assert_eq!(indicators_from_settings(settings).approval_mode, None);
 }
+
+/// `strict_auto_review` is only meaningful for a turn-scoped grant.
+///
+/// `bespoke_event_handling.rs` does not merely ignore the session pairing: it
+/// logs an error and substitutes an *empty* permission grant, so the user's
+/// approval is discarded. Rejecting it here keeps that outcome unreachable.
+#[test]
+fn strict_auto_review_cannot_be_session_scoped() {
+    let error = permissions_approval_response(
+        serde_json::json!({}),
+        PermissionGrantScope::Session,
+        /*strict_auto_review*/ true,
+    )
+    .expect_err("session-scoped strict review must be refused");
+
+    assert!(
+        error.contains("single turn"),
+        "error should explain the constraint, got: {error}"
+    );
+}
+
+/// Absent, not `false` — the protocol field is `Option<bool>` with
+/// `skip_serializing_if`, so sending `false` would assert a choice the user
+/// never made.
+#[test]
+fn strict_auto_review_is_omitted_when_not_requested() {
+    let response = permissions_approval_response(
+        serde_json::json!({"network": {"enabled": true}}),
+        PermissionGrantScope::Session,
+        /*strict_auto_review*/ false,
+    )
+    .expect("a plain session grant is valid");
+
+    assert_eq!(
+        response,
+        serde_json::json!({
+            "permissions": {"network": {"enabled": true}},
+            "scope": "session",
+        })
+    );
+}
+
+#[test]
+fn strict_auto_review_is_sent_for_turn_scope() {
+    let response = permissions_approval_response(
+        serde_json::json!({}),
+        PermissionGrantScope::Turn,
+        /*strict_auto_review*/ true,
+    )
+    .expect("turn-scoped strict review is the supported pairing");
+
+    assert_eq!(
+        response,
+        serde_json::json!({
+            "permissions": {},
+            "scope": "turn",
+            "strictAutoReview": true,
+        })
+    );
+}

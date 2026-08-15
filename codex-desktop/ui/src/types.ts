@@ -1254,3 +1254,17 @@ export interface ImportProgress {
   results: ImportTypeResult[];
   done: boolean;
 }
+
+// -- Self-update (ADR-0007) --------------------------------------------------
+
+/**
+ * Result of `check_for_update`. A tagged union rather than a nullable update,
+ * because "we could not check" and "there is nothing to install" must not
+ * collapse into the same rendering — shipping unconfigured and reporting
+ * "up to date" would be the dishonest degradation ADR-0007 warns against.
+ * Built in Rust (`src/updater.rs`); these literals mirror its serde tags.
+ */
+export type UpdateStatus =
+  | { status: "notConfigured"; reason: string }
+  | { status: "upToDate"; currentVersion: string }
+  | { status: "available"; currentVersion: string; version: string; notes?: string | null };

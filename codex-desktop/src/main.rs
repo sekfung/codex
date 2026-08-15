@@ -25,6 +25,7 @@ mod mention_naming;
 mod projects;
 mod server_requests;
 mod thread_ops;
+mod updater;
 mod user_input;
 
 use std::sync::Arc;
@@ -242,6 +243,7 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let project_store = projects::ProjectStore::load(app.handle())
                 .expect("failed to load Project list from app-local storage");
@@ -331,6 +333,8 @@ fn main() {
             commands::resolve_file_change_approval,
             commands::resolve_permissions_approval,
             commands::reject_approval,
+            updater::check_for_update,
+            updater::install_update,
             config_settings::read_config,
             config_settings::read_config_requirements,
             config_settings::read_default_approval_mode,

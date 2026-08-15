@@ -1,6 +1,10 @@
+import { useState } from "react";
+
 import { useStore } from "../../store";
 import { useAsyncAction } from "./useAsyncAction";
-import type { ApprovalMode } from "../../types";
+import * as api from "../../api";
+import type { ApprovalMode, UpdateStatus } from "../../types";
+import { Button } from "@/components/ui/button";
 import { ConfigPending, OriginNote, SettingRow, SettingsHeader, SettingsSection } from "./SettingsPrimitives";
 import { Switch } from "@/components/ui/switch";
 import { Select } from "@/components/ui/select";
@@ -123,23 +127,77 @@ export function GeneralSettings() {
             <Select aria-label="默认文件打开目标" value={null} options={[]} disabled placeholder="未找到目标" />
           }
         />
+        {/* 智能体环境 / 集成终端 Shell from screenshot 02 are gone rather than
+            shown inert. Both name a capability this engine does not have —
+            there is no config key selecting where the agent runs or which
+            shell a terminal opens, and `wsl_paths.rs`, which ADR-0006 named
+            as their basis, is a path converter (see ADR-0022). What the
+            engine does expose about the shell environment is a real screen
+            of its own; the pointer below leads there instead of leaving two
+            permanently dead rows implying they are coming. */}
         <SettingRow
-          label="智能体环境"
-          description="选择智能体的运行位置"
-          disabled
-          note="尚未接入：环境设置（ADR-0006 中仍属 v1 范围）计划在后续增量中接入。"
-          control={<Select aria-label="智能体环境" value={null} options={[]} disabled placeholder="本机" />}
-        />
-        <SettingRow
-          label="集成终端 Shell"
-          description="选择要在集成终端中打开的 Shell"
-          disabled
-          note="尚未接入"
-          control={<Select aria-label="集成终端 Shell" value={null} options={[]} disabled placeholder="默认" />}
+          label="Shell 环境"
+          description="智能体执行命令时的环境变量继承范围与登录 Shell 策略"
+          control={<span className="text-xs text-muted-foreground">见「环境」设置</span>}
         />
       </SettingsSection>
 
+      <UpdateSection />
+
       {error && <p className="text-xs text-destructive">写入配置失败：{error}</p>}
     </>
+  );
+}
+
+/**
+ * Self-update (ADR-0007).
+ *
+ * Ships unconfigured: the endpoint and signing pubkey are the user's to
+ * supply. The `notConfigured` case is rendered as its own state rather than
+ * folded into an error or a reassuring "up to date", because those would each
+ * misreport it.
+ */
+function UpdateSection() {
+  const [status, setStatus] = useState<UpdateStatus | null>(null);
+  const { busy, error, run } = useAsyncAction();
+
+  const check = () => run(async () => setStatus(await api.checkForUpdate()));
+  const install = () => run(() => api.installUpdate());
+
+  return (
+    <SettingsSection title="更新">
+      <SettingRow
+        label="应用更新"
+        description="Codex Desktop 独立于 CLI 发布，通过签名更新包自行更新。"
+        control={
+          <Button size="sm" variant="outline" disabled={busy} onClick={() => void check()}>
+            {busy ? "检查中…" : "检查更新"}
+          </Button>
+        }
+      />
+      {status?.status === "notConfigured" && (
+        <div className="px-4 pb-3 text-xs text-muted-foreground">
+          未启用自动更新：{status.reason}。需在 <code>tauri.conf.json</code> 的{" "}
+          <code>plugins.updater</code> 中填入更新源地址与签名公钥后重新打包。
+        </div>
+      )}
+      {status?.status === "upToDate" && (
+        <div className="px-4 pb-3 text-xs text-muted-foreground">
+          已是最新版本（{status.currentVersion}）。
+        </div>
+      )}
+      {status?.status === "available" && (
+        <div className="flex items-start justify-between gap-3 px-4 pb-3">
+          <div className="min-w-0 text-xs text-muted-foreground">
+            发现新版本 {status.version}（当前 {status.currentVersion}）。
+            {status.notes && <span className="mt-1 block whitespace-pre-wrap">{status.notes}</span>}
+          </div>
+          <Button size="sm" disabled={busy} onClick={() => void install()}>
+            {busy ? "安装中…" : "下载并安装"}
+          </Button>
+        </div>
+      )}
+      {error && <div className="px-4 pb-3 text-xs text-destructive">更新失败：{error}</div>}
+    </SettingsSection>
   );
 }

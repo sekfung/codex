@@ -29,6 +29,7 @@ import type {
   McpServerOauthLoginResponse,
   MemorySettings,
   ModelListResponse,
+  PermissionProfile,
   Personality,
   PluginListResponse,
   AppsListResponse,
@@ -50,6 +51,7 @@ import type {
   ThreadSettingsIndicators,
   TokenBudgetEdit,
   TurnSubmission,
+  UpdateStatus,
   ElicitationAnswer,
   ElicitationField,
   ElicitationView,
@@ -272,6 +274,11 @@ export const setDefaultApprovalMode = (approvalMode: ApprovalMode) =>
 export const configFilePath = () => invoke<string>("config_file_path");
 export const openPathInOs = (path: string) => invoke<void>("open_path_in_os", { path });
 
+// -- Self-update (ADR-0007) --------------------------------------------------
+
+export const checkForUpdate = () => invoke<UpdateStatus>("check_for_update");
+export const installUpdate = () => invoke<void>("install_update");
+
 // -- Turns --------------------------------------------------------------
 
 /**
@@ -462,10 +469,24 @@ export const resolveFileChangeApproval = (
   decision: Record<string, unknown>,
 ) => invoke<void>("resolve_file_change_approval", { requestId, decision });
 
+/**
+ * `strictAutoReview` is passed separately rather than folded into a response
+ * object because it is not independent of `scope`: the engine discards a
+ * session-scoped grant that also asks for strict review. Rust assembles the
+ * body and refuses that pairing, so it cannot be sent from here.
+ */
 export const resolvePermissionsApproval = (
   requestId: unknown,
-  response: Record<string, unknown>,
-) => invoke<void>("resolve_permissions_approval", { requestId, response });
+  permissions: PermissionProfile,
+  scope: "turn" | "session",
+  strictAutoReview: boolean,
+) =>
+  invoke<void>("resolve_permissions_approval", {
+    requestId,
+    permissions,
+    scope,
+    strictAutoReview,
+  });
 
 export const rejectApproval = (requestId: unknown, message: string) =>
   invoke<void>("reject_approval", { requestId, message });

@@ -3,15 +3,20 @@
 //! Most request-shaped commands return the raw JSON-RPC result as-is rather
 //! than a hand-mapped TypeScript-friendly shape: this increment is about
 //! getting real data flowing end-to-end, not about a fully typed IPC
-//! contract. Approval-decision payloads are similarly accepted as raw JSON
-//! objects from the frontend and forwarded to `resolve_server_request`
-//! verbatim — the frontend is responsible for shaping them to match
-//! `CommandExecutionApprovalDecision`/`FileChangeApprovalDecision`/
-//! `PermissionsRequestApprovalResponse`'s camelCase JSON shape (ADR-0015).
+//! contract. Approval *decisions* are similarly accepted as raw JSON objects
+//! and forwarded to `resolve_server_request` verbatim — the frontend shapes
+//! them to match `CommandExecutionApprovalDecision`/
+//! `FileChangeApprovalDecision` (ADR-0015).
+//!
+//! The permissions response is the exception: its fields constrain each other
+//! (see `resolve_permissions_approval`), so it is assembled here where the
+//! invalid combination can be made unrepresentable rather than merely
+//! discouraged.
 
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::ModelListParams;
+use codex_app_server_protocol::PermissionGrantScope;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadDeleteParams;
 use codex_app_server_protocol::ThreadForkParams;
@@ -559,21 +564,59 @@ pub async fn resolve_file_change_approval(
         .await
 }
 
-/// Resolves `item/permissions/requestApproval`. `response` must match
-/// `PermissionsRequestApprovalResponse`'s JSON shape: `{"permissions": {...
-/// GrantedPermissionProfile ...}, "scope": "turn" | "session",
-/// "strictAutoReview"?: bool}`. This backs the composer's persistent
-/// approval-mode selector (ADR-0016) once its 3 presets are mapped to
-/// concrete permission profiles — that mapping is frontend-side and not
-/// designed yet, so for now the frontend must build this object itself.
+/// Resolves `item/permissions/requestApproval`.
+///
+/// `permissions` is the `GrantedPermissionProfile` to grant, echoed back from
+/// the request; the frontend supplies it as raw JSON because the profile is a
+/// pass-through, not something this crate interprets.
+///
+/// `strict_auto_review` — "review every subsequent command in this turn before
+/// normal sandboxed execution" — is assembled here rather than frontend-side
+/// because it is **not** independent of `scope`. `bespoke_event_handling.rs`
+/// rejects the pair outright: strict review combined with a session-scoped
+/// grant logs an error and returns an *empty* permission grant, so the user's
+/// approval is silently thrown away. Building the response in Rust means that
+/// combination cannot be expressed at all, rather than being expressible and
+/// wrong.
 #[tauri::command]
 pub async fn resolve_permissions_approval(
     bridge: State<'_, AppServerBridge>,
     request_id: JsonValue,
-    response: JsonValue,
+    permissions: JsonValue,
+    scope: PermissionGrantScope,
+    strict_auto_review: bool,
 ) -> CmdResult<()> {
     let request_id = parse_request_id(request_id)?;
+    let response = permissions_approval_response(permissions, scope, strict_auto_review)?;
     bridge.resolve_server_request(request_id, response).await
+}
+
+/// Builds the `PermissionsRequestApprovalResponse` body, refusing the one
+/// combination the engine discards. Separate from the command so the invariant
+/// is testable without a bridge.
+fn permissions_approval_response(
+    permissions: JsonValue,
+    scope: PermissionGrantScope,
+    strict_auto_review: bool,
+) -> CmdResult<JsonValue> {
+    if strict_auto_review && scope == PermissionGrantScope::Session {
+        return Err(
+            "strict auto review applies to a single turn, so it cannot be combined with a \
+             session-scoped grant"
+                .to_string(),
+        );
+    }
+    let mut response = serde_json::json!({
+        "permissions": permissions,
+        "scope": scope,
+    });
+    // Omitted rather than sent as `false`: the field is `Option<bool>` with
+    // `skip_serializing_if = "Option::is_none"`, so absent is how the protocol
+    // spells "not requested".
+    if strict_auto_review {
+        response["strictAutoReview"] = JsonValue::Bool(true);
+    }
+    Ok(response)
 }
 
 #[tauri::command]

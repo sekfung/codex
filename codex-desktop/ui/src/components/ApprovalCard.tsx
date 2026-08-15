@@ -548,16 +548,21 @@ function PermissionsApproval({
   resolve,
 }: DecisionProps & { approval: PendingPermissionsApproval }) {
   const requested = approval.permissions ?? {};
+  const [strictAutoReview, setStrictAutoReview] = useState(false);
 
   // Granting echoes the requested profile back: `RequestPermissionProfile` and
   // `GrantedPermissionProfile` are the same `{network?, fileSystem?}` shape,
   // so "grant what was asked" is a faithful round-trip. What changes per
   // button is the *scope* (this turn vs. the session).
   function grant(scope: "turn" | "session") {
-    return api.resolvePermissionsApproval(approval.requestId, {
-      permissions: requested,
+    return api.resolvePermissionsApproval(
+      approval.requestId,
+      requested,
       scope,
-    });
+      // Only ever true for a turn grant — the session button is hidden while
+      // it is checked, and Rust refuses the pairing regardless.
+      scope === "turn" && strictAutoReview,
+    );
   }
 
   return (
@@ -571,18 +576,38 @@ function PermissionsApproval({
         </Detail>
       )}
       <PermissionProfileSummary profile={requested} />
+      {/* ADR-0015's third permissions axis. Scoped to the turn grant because
+          the engine discards a session grant that also asks for strict
+          review, so offering both together would silently lose the grant. */}
+      <label className="mt-2.5 flex cursor-pointer items-start gap-2 text-xs text-muted-foreground">
+        <input
+          type="checkbox"
+          className="mt-0.5 accent-primary"
+          checked={strictAutoReview}
+          disabled={busy}
+          onChange={(event) => setStrictAutoReview(event.target.checked)}
+        />
+        <span>
+          本轮后续命令逐条审查
+          <span className="block text-muted-foreground/80">
+            仅适用于「仅本轮授予」，勾选后不可按会话授予
+          </span>
+        </span>
+      </label>
       <Actions>
         <Button size="sm" disabled={busy} onClick={() => resolve(() => grant("turn"))}>
           仅本轮授予
         </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={busy}
-          onClick={() => resolve(() => grant("session"))}
-        >
-          本次会话授予
-        </Button>
+        {!strictAutoReview && (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={busy}
+            onClick={() => resolve(() => grant("session"))}
+          >
+            本次会话授予
+          </Button>
+        )}
         <Button
           size="sm"
           variant="ghost"

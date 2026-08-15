@@ -30,6 +30,7 @@ import { HooksSettings } from "./HooksSettings";
 import { MemoriesSettings } from "./MemoriesSettings";
 import { PluginsSettings } from "./PluginsSettings";
 import { SkillsSettings } from "./SkillsSettings";
+import { EnvironmentSettings } from "./EnvironmentSettings";
 import { ExperimentalSettings } from "./ExperimentalSettings";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -88,7 +89,7 @@ const NAV_GROUPS: NavGroup[] = [
       // counterpart in the screenshots. See ExperimentalSettings.tsx.
       { id: "experimental", label: "实验性功能", Icon: FlaskConical, ready: true },
       { id: "git", label: "Git", Icon: GitBranch },
-      { id: "environment", label: "环境", Icon: Terminal },
+      { id: "environment", label: "环境", Icon: Terminal, ready: true },
     ],
   },
 ];
@@ -186,6 +187,7 @@ export function SettingsShell() {
           {active === "memories" && <MemoriesSettings />}
           {active === "skills" && <SkillsSettings />}
           {active === "experimental" && <ExperimentalSettings />}
+          {active === "environment" && <EnvironmentSettings />}
         </div>
       </main>
     </div>
