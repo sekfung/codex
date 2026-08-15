@@ -21,13 +21,16 @@ use codex_app_server_protocol::CollaborationModeListResponse;
 use codex_app_server_protocol::FuzzyFileSearchMatchType;
 use codex_app_server_protocol::FuzzyFileSearchParams;
 use codex_app_server_protocol::FuzzyFileSearchResponse;
+use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ReviewDelivery;
 use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ReviewTarget;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::ThreadCompactStartParams;
+use codex_app_server_protocol::ThreadQueueAddParams;
 use codex_app_server_protocol::ThreadSettingsUpdateParams;
 use codex_app_server_protocol::TurnStartParams;
+use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::UserInput;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::CollaborationModeMask as CoreCollaborationModeMask;
@@ -42,6 +45,7 @@ use std::path::PathBuf;
 use tauri::State;
 
 use crate::bridge::AppServerBridge;
+use crate::bridge::RequestFailure;
 
 type CmdResult<T> = Result<T, String>;
 
@@ -344,6 +348,180 @@ pub async fn send_turn(
             },
         })
         .await
+}
+
+/// How a submission that raced a running turn was resolved.
+///
+/// Steering is not a separate user intent in the engine's model: the TUI has
+/// one submit action and picks steer / start / queue from live state and the
+/// server's answer (`tui/src/app/thread_routing.rs`). This mirrors that, and
+/// reports which path was taken so the UI can say what happened rather than
+/// leaving the user guessing where their message went.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", tag = "outcome")]
+pub enum TurnSubmission {
+    /// Folded into the turn already running.
+    Steered { turn_id: String },
+    /// No turn was running (or it ended mid-submit), so a new one started.
+    Started,
+    /// The active turn refuses steering (review and compaction turns do), so
+    /// the message was queued to run next instead of being dropped.
+    Queued,
+}
+
+/// Why a `turn/steer` failed, when the reason is one this client can act on.
+///
+/// Ported from `active_turn_steer_race` in `tui/src/app.rs`. The engine
+/// reports these as message text, so the strings are matched exactly as the
+/// TUI matches them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SteerRace {
+    /// The turn ended between reading the active turn id and steering it.
+    Missing,
+    /// Our cached active turn id is stale; the server names the real one.
+    ExpectedTurnMismatch { actual_turn_id: String },
+}
+
+fn steer_race(error: &JSONRPCErrorError) -> Option<SteerRace> {
+    if error.message == "no active turn to steer" {
+        return Some(SteerRace::Missing);
+    }
+    // e.g. "expected active turn id `abc` but found `def`"
+    let actual_turn_id = error
+        .message
+        .strip_prefix("expected active turn id `")?
+        .split_once("` but found `")?
+        .1
+        .strip_suffix('`')?
+        .to_string();
+    Some(SteerRace::ExpectedTurnMismatch { actual_turn_id })
+}
+
+/// True when the engine refused because this kind of turn cannot be steered.
+///
+/// Unlike the races above this arrives in `error.data.codexErrorInfo`, not the
+/// message — which is why submission uses the bridge's detail-preserving
+/// request path.
+fn active_turn_not_steerable(error: &JSONRPCErrorError) -> bool {
+    let Some(data) = error.data.as_ref() else {
+        return false;
+    };
+    data.get("codexErrorInfo")
+        .and_then(|info| info.get("type"))
+        .and_then(JsonValue::as_str)
+        == Some("activeTurnNotSteerable")
+}
+
+/// Submits composer input, choosing steer / start / queue the way the TUI
+/// does.
+///
+/// `active_turn_id` is the turn the frontend believes is running, or `None`
+/// when it believes the thread is idle. Every branch below exists because the
+/// belief can be wrong by the time the request lands.
+#[tauri::command]
+pub async fn submit_turn(
+    bridge: State<'_, AppServerBridge>,
+    thread_id: String,
+    active_turn_id: Option<String>,
+    text: String,
+    attachments: Vec<ComposerAttachment>,
+    skills: Vec<ComposerSkill>,
+    file_refs: Vec<ComposerFileRef>,
+    mentions: Vec<ComposerMention>,
+) -> CmdResult<TurnSubmission> {
+    let input = build_turn_input(text, attachments, skills, file_refs, mentions);
+
+    if let Some(turn_id) = active_turn_id {
+        let mut steer_turn_id = turn_id;
+        let mut retried_after_mismatch = false;
+        loop {
+            let result = bridge
+                .request_detailed(ClientRequest::TurnSteer {
+                    request_id: bridge.next_request_id(),
+                    params: TurnSteerParams {
+                        thread_id: thread_id.clone(),
+                        input: input.clone(),
+                        expected_turn_id: steer_turn_id.clone(),
+                        client_user_message_id: None,
+                        responsesapi_client_metadata: None,
+                        additional_context: None,
+                    },
+                })
+                .await;
+
+            let failure = match result {
+                Ok(value) => {
+                    let turn_id = value
+                        .get("turnId")
+                        .and_then(JsonValue::as_str)
+                        .unwrap_or(&steer_turn_id)
+                        .to_string();
+                    return Ok(TurnSubmission::Steered { turn_id });
+                }
+                Err(failure) => failure,
+            };
+
+            let RequestFailure::Server(error) = &failure else {
+                return Err(failure.into());
+            };
+
+            if active_turn_not_steerable(error) {
+                // Not an error the user should see: the message is still
+                // wanted, just after this turn. Queue rather than drop it.
+                queue_turn_input(&bridge, &thread_id, input).await?;
+                return Ok(TurnSubmission::Queued);
+            }
+
+            match steer_race(error) {
+                // The turn finished first; fall through and start a new one.
+                Some(SteerRace::Missing) => break,
+                // Review flows can swap the active turn before its
+                // notification arrives. Retry once against the turn the
+                // server names, then give up rather than loop.
+                Some(SteerRace::ExpectedTurnMismatch { actual_turn_id })
+                    if !retried_after_mismatch && actual_turn_id != steer_turn_id =>
+                {
+                    steer_turn_id = actual_turn_id;
+                    retried_after_mismatch = true;
+                }
+                _ => return Err(failure.into()),
+            }
+        }
+    }
+
+    bridge
+        .request(ClientRequest::TurnStart {
+            request_id: bridge.next_request_id(),
+            params: TurnStartParams {
+                thread_id,
+                input,
+                ..Default::default()
+            },
+        })
+        .await?;
+    Ok(TurnSubmission::Started)
+}
+
+/// Queues already-built input. Mirrors `thread_ops::queue_add`, which builds
+/// its input from the same `build_turn_input`, so a queued fallback is
+/// indistinguishable from an explicitly queued message.
+async fn queue_turn_input(
+    bridge: &AppServerBridge,
+    thread_id: &str,
+    input: Vec<UserInput>,
+) -> CmdResult<()> {
+    bridge
+        .request(ClientRequest::ThreadQueueAdd {
+            request_id: bridge.next_request_id(),
+            params: ThreadQueueAddParams {
+                thread_id: thread_id.to_string(),
+                input,
+                // Required by the API, same as `thread_ops::queue_add`.
+                client_user_message_id: uuid::Uuid::now_v7().to_string(),
+            },
+        })
+        .await
+        .map(|_| ())
 }
 
 /// The `@…` token to insert for a chosen app/plugin.
@@ -687,6 +865,72 @@ pub fn context_usage(
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    fn server_error(message: &str, data: Option<JsonValue>) -> JSONRPCErrorError {
+        JSONRPCErrorError {
+            code: -32000,
+            message: message.to_string(),
+            data,
+        }
+    }
+
+    /// The turn ended before the steer landed. The engine says so in the
+    /// message, and the caller must fall through to starting a new turn
+    /// rather than reporting a failure the user cannot act on.
+    #[test]
+    fn steer_race_detects_a_turn_that_already_ended() {
+        assert_eq!(
+            steer_race(&server_error("no active turn to steer", None)),
+            Some(SteerRace::Missing)
+        );
+    }
+
+    /// A stale cached turn id is recoverable: the engine names the turn it
+    /// actually has, which is what makes the single retry possible.
+    #[test]
+    fn steer_race_extracts_the_servers_actual_turn_id() {
+        assert_eq!(
+            steer_race(&server_error(
+                "expected active turn id `turn-a` but found `turn-b`",
+                None
+            )),
+            Some(SteerRace::ExpectedTurnMismatch {
+                actual_turn_id: "turn-b".to_string()
+            })
+        );
+    }
+
+    /// An unrelated failure must not be mistaken for a race, or a real error
+    /// would be silently retried and then swallowed.
+    #[test]
+    fn steer_race_ignores_unrelated_errors() {
+        assert_eq!(steer_race(&server_error("thread is archived", None)), None);
+    }
+
+    /// Review and compaction turns refuse steering, and they report it
+    /// through `data.codexErrorInfo` rather than the message — the reason
+    /// submission uses the bridge's detail-preserving request path. Missing
+    /// that would drop the user's message instead of queueing it.
+    #[test]
+    fn not_steerable_is_read_from_error_data_not_the_message() {
+        let error = server_error(
+            "active turn is not steerable",
+            Some(serde_json::json!({
+                "codexErrorInfo": { "type": "activeTurnNotSteerable", "turnKind": "review" }
+            })),
+        );
+        assert!(active_turn_not_steerable(&error));
+        // ...and it is not a race, so it must not be retried.
+        assert_eq!(steer_race(&error), None);
+    }
+
+    #[test]
+    fn not_steerable_is_false_without_error_data() {
+        assert!(!active_turn_not_steerable(&server_error(
+            "no active turn to steer",
+            None
+        )));
+    }
 
     fn kinds(input: &[UserInput]) -> Vec<&'static str> {
         input

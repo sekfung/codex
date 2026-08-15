@@ -9,6 +9,7 @@ import {
   Loader2,
   Sparkles,
   Terminal,
+  Undo2,
   Users,
 } from "lucide-react";
 
@@ -153,7 +154,9 @@ function ItemRenderer({
 
   switch (item.type) {
     case "userMessage":
-      return <UserMessageView item={item as UserMessageItem} />;
+      return (
+        <UserMessageView item={item as UserMessageItem} threadId={threadId} turnId={turnId} />
+      );
     case "agentMessage":
       return (
         <AgentMessageView item={item as AgentMessageItem} threadId={threadId} turnId={turnId} />
@@ -260,7 +263,15 @@ function GenericActivityRow({ Icon, label }: { Icon: typeof Terminal; label: str
   return <ActivityRow Icon={Icon} label={label} />;
 }
 
-function UserMessageView({ item }: { item: UserMessageItem }) {
+function UserMessageView({
+  item,
+  threadId,
+  turnId,
+}: {
+  item: UserMessageItem;
+  threadId: string;
+  turnId: string | undefined;
+}) {
   // `UserInput` is a tagged union: only the `text` variant carries `text`.
   // Images/skills/mentions would otherwise render as an empty bubble, so
   // label them rather than dropping them.
@@ -283,11 +294,90 @@ function UserMessageView({ item }: { item: UserMessageItem }) {
   });
 
   return (
-    <div className="flex justify-end">
+    <div className="group/user flex flex-col items-end gap-1">
       <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl bg-secondary px-4 py-2.5 text-[15px] leading-relaxed text-secondary-foreground">
         {parts.join("\n")}
       </div>
+      {threadId && turnId && <RevertAction threadId={threadId} turnId={turnId} />}
     </div>
+  );
+}
+
+/// `thread/revert` from a user message: drops that turn and everything after
+/// it.
+///
+/// Deliberately worded to say what revert does *not* do. The engine rewrites
+/// conversation history only — `thread-store`'s `revert_thread` writes a new
+/// rollout referencing the retained prefix and moves a pointer, never
+/// touching the working tree. Someone reading "revert" as "undo the edits"
+/// would otherwise assume their files had been restored when they had not.
+///
+/// Two-step confirm, matching the sidebar's thread delete: this is not
+/// recoverable from inside the app even though the engine retains the old
+/// rollout.
+function RevertAction({ threadId, turnId }: { threadId: string; turnId: string }) {
+  const { revertThread } = useStore();
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleRevert() {
+    setBusy(true);
+    setError(null);
+    try {
+      await revertThread(threadId, turnId);
+    } catch (err) {
+      // The engine rejects non-paginated threads outright ("thread/revert
+      // only supports paginated threads"); surface that rather than leaving
+      // the row looking inert.
+      setError(String(err));
+      setConfirming(false);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (error) {
+    return <div className="text-xs text-destructive">回退失败：{error}</div>;
+  }
+
+  if (confirming) {
+    return (
+      <div className="flex items-center gap-1.5 text-xs">
+        <span className="text-muted-foreground">
+          删除此消息及之后的所有对话记录？文件改动不会撤销。
+        </span>
+        <Button size="xs" variant="ghost" disabled={busy} onClick={() => setConfirming(false)}>
+          取消
+        </Button>
+        <Button
+          size="xs"
+          variant="ghost"
+          className="text-destructive hover:text-destructive"
+          disabled={busy}
+          onClick={handleRevert}
+        >
+          {busy ? "回退中…" : "确认回退"}
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="回退到此处"
+          className="text-muted-foreground opacity-0 transition-opacity group-hover/user:opacity-100 focus-visible:opacity-100"
+          onClick={() => setConfirming(true)}
+        >
+          <Undo2 />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>回退：删除此消息及之后的对话记录（不撤销文件改动）</TooltipContent>
+    </Tooltip>
   );
 }
 

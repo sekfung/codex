@@ -4,6 +4,7 @@ import {
   Blocks,
   Check,
   ChevronDown,
+  CornerDownRight,
   CircleAlert,
   FileText,
   Folder,
@@ -32,6 +33,7 @@ import type {
   ModelSelection,
   ReasoningEffort,
   SkillMetadata,
+  TurnSubmission,
 } from "../types";
 import { skillSummary } from "../types";
 import { ContextMeter } from "./ContextMeter";
@@ -145,8 +147,7 @@ function MentionRow({
 export function Composer({ threadId }: { threadId: string }) {
   const {
     state,
-    sendMessage,
-    queueMessage,
+    submitMessage,
     setApprovalMode,
     setModelSelection,
     setCollaborationMode,
@@ -185,6 +186,10 @@ export function Composer({ threadId }: { threadId: string }) {
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [sending, setSending] = useState(false);
+  /// What the last submission actually did. Shown briefly because with a turn
+  /// running the outcome is the engine's decision, not the user's — "steered"
+  /// and "queued" look identical from the composer otherwise.
+  const [lastSubmission, setLastSubmission] = useState<TurnSubmission["outcome"] | null>(null);
   const [interrupting, setInterrupting] = useState(false);
   const [modeError, setModeError] = useState<string | null>(null);
 
@@ -506,12 +511,22 @@ export function Composer({ threadId }: { threadId: string }) {
     // either alone is enough to send.
     if ((!trimmed && attachments.length === 0 && fileRefs.length === 0) || sending) return;
     setSending(true);
+    setLastSubmission(null);
     try {
-      if (turnRunning) {
-        await queueMessage(threadId, trimmed, attachments, activeSkills, fileRefs, activeMentions);
-      } else {
-        await sendMessage(threadId, trimmed, attachments, activeSkills, fileRefs, activeMentions);
-      }
+      // One submit action, as in the TUI: with a turn running the engine
+      // wants the message steered into it, and only turn kinds that refuse
+      // steering (review, compaction) fall back to the queue. Which happened
+      // is reported below rather than chosen here — the client cannot know
+      // ahead of the request.
+      const submission = await submitMessage(
+        threadId,
+        trimmed,
+        attachments,
+        activeSkills,
+        fileRefs,
+        activeMentions,
+      );
+      setLastSubmission(submission.outcome);
       setText("");
       setAttachments([]);
       setFileRefs([]);
@@ -1022,8 +1037,12 @@ export function Composer({ threadId }: { threadId: string }) {
             <Button
               size="icon-sm"
               className="rounded-full"
-              aria-label={turnRunning ? "加入队列" : "发送"}
-              title={turnRunning ? "加入队列，当前回合结束后自动执行" : undefined}
+              aria-label={turnRunning ? "补充说明" : "发送"}
+              title={
+                turnRunning
+                  ? "补充说明：并入正在进行的回合；该回合不接受插入时改为排队"
+                  : undefined
+              }
               onClick={handleSend}
               disabled={
                 sending || (!text.trim() && attachments.length === 0 && fileRefs.length === 0)
@@ -1032,13 +1051,29 @@ export function Composer({ threadId }: { threadId: string }) {
               {sending ? (
                 <Loader2 className="animate-spin" />
               ) : turnRunning ? (
-                <ListPlus />
+                <CornerDownRight />
               ) : (
                 <ArrowUp />
               )}
             </Button>
           </div>
         </div>
+
+        {/* With a turn running the engine decides between steering and
+            queueing, so say which happened rather than leaving the user to
+            guess where the message went. */}
+        {lastSubmission === "steered" && (
+          <div className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+            <CornerDownRight className="size-3.5" />
+            已并入当前回合
+          </div>
+        )}
+        {lastSubmission === "queued" && (
+          <div className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+            <ListPlus className="size-3.5" />
+            当前回合不接受插入，已加入队列
+          </div>
+        )}
 
         {modeError && (
           <div className="mt-2 text-xs text-destructive">无法切换批准模式: {modeError}</div>

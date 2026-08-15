@@ -26,6 +26,7 @@ use codex_app_server_protocol::ThreadQueueListResponse;
 use codex_app_server_protocol::ThreadQueueReorderParams;
 use codex_app_server_protocol::ThreadQueueStartParams;
 use codex_app_server_protocol::ThreadQueueUpdateParams;
+use codex_app_server_protocol::ThreadRevertParams;
 use codex_app_server_protocol::UserInput;
 use serde::Deserialize;
 use serde::Serialize;
@@ -436,6 +437,50 @@ pub async fn goal_clear(
         .request(ClientRequest::ThreadGoalClear {
             request_id: bridge.next_request_id(),
             params: ThreadGoalClearParams { thread_id },
+        })
+        .await
+}
+
+// --- Revert ----------------------------------------------------------------
+
+/// `thread/revert` — drop `before_turn_id` and every later turn from the
+/// thread's history.
+///
+/// What this does and does not touch, established in the engine rather than
+/// assumed, because the obvious reading of "revert" is wrong in a way that
+/// matters:
+///
+/// - It rewrites **conversation history only**. `thread-store`'s
+///   `revert_thread` documents itself as "creating a new immutable rollout
+///   file… Old rollouts stay intact. The new file references the retained
+///   prefix, and the only mutable cutover is the existing SQLite
+///   rollout-path pointer." Nothing touches the working tree, so **files the
+///   agent already wrote stay written**. The UI has to say so plainly; a user
+///   who reads "revert" as "undo the edits" would be badly misled.
+/// - It is non-destructive at the storage layer — superseded rollouts are
+///   retained, not deleted.
+/// - It requires paginated history; the engine rejects other threads with
+///   "thread/revert only supports paginated threads". That surfaces as a
+///   plain error rather than being pre-checked here, since only the engine
+///   knows a thread's history mode.
+///
+/// The response carries pagination cursors for rehydrating retained history.
+/// This client re-resumes the thread instead, which it already knows how to
+/// do; the engine keeps thread state and subscriptions across the internal
+/// reload specifically so a resume stays valid.
+#[tauri::command]
+pub async fn revert_thread(
+    bridge: State<'_, AppServerBridge>,
+    thread_id: String,
+    before_turn_id: String,
+) -> CmdResult<JsonValue> {
+    bridge
+        .request(ClientRequest::ThreadRevert {
+            request_id: bridge.next_request_id(),
+            params: ThreadRevertParams {
+                thread_id,
+                before_turn_id,
+            },
         })
         .await
 }

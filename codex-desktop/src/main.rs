@@ -16,6 +16,7 @@ mod config_settings;
 mod integrations;
 mod projects;
 mod thread_ops;
+mod user_input;
 
 use std::sync::Arc;
 
@@ -236,6 +237,7 @@ fn main() {
             commands::resume_thread,
             commands::fork_thread,
             composer::send_turn,
+            composer::submit_turn,
             composer::list_skills,
             composer::search_files,
             composer::compact_thread,
@@ -257,6 +259,8 @@ fn main() {
             thread_ops::goal_get,
             thread_ops::goal_set,
             thread_ops::goal_clear,
+            thread_ops::revert_thread,
+            user_input::resolve_user_input_request,
             commands::interrupt_turn,
             commands::resolve_command_execution_approval,
             commands::resolve_file_change_approval,

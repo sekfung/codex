@@ -467,10 +467,61 @@ export interface PendingPermissionsApproval extends PendingApprovalBase {
   permissions?: PermissionProfile;
 }
 
+/// `ToolRequestUserInputOption` (v2/item.rs).
+export interface UserInputOption {
+  label: string;
+  description: string;
+}
+
+/// `ToolRequestUserInputQuestion` (v2/item.rs). A question is free text when
+/// `options` is absent or empty; `isOther` adds a free-text answer *alongside*
+/// options rather than replacing them.
+export interface UserInputQuestion {
+  id: string;
+  header: string;
+  question: string;
+  isOther?: boolean;
+  /// Answer should be masked in the UI.
+  isSecret?: boolean;
+  options?: UserInputOption[] | null;
+}
+
+/// `item/tool/requestUserInput` — a tool asking the user a question.
+///
+/// It rides in the same list as the approvals because it is the same class of
+/// thing: a server request that blocks the turn until this client answers.
+/// That also means it inherits the composer's pending-decision affordance,
+/// which ADR-0016 called for.
+export interface PendingUserInputRequest extends PendingApprovalBase {
+  kind: "userInput";
+  questions: UserInputQuestion[];
+  /// False for advisory requests the turn does not wait on.
+  isBlocking: boolean;
+}
+
+/// One question's answer as collected in the UI. Rust encodes this into the
+/// protocol's `{answers: {[id]: {answers: string[]}}}` shape, including the
+/// `user_note:` prefix convention — see `src/user_input.rs`.
+export interface UserInputAnswerDraft {
+  questionId: string;
+  selectedLabel?: string | null;
+  note?: string | null;
+}
+
 export type PendingApproval =
   | PendingCommandExecutionApproval
   | PendingFileChangeApproval
-  | PendingPermissionsApproval;
+  | PendingPermissionsApproval
+  | PendingUserInputRequest;
+
+/// What `submit_turn` did with a message. Steering is not a separate user
+/// intent in the engine's model — the client picks steer/start/queue from live
+/// state and the server's answer — so the UI reports the outcome instead of
+/// asking the user to choose up front.
+export type TurnSubmission =
+  | { outcome: "steered"; turnId: string }
+  | { outcome: "started" }
+  | { outcome: "queued" };
 
 // -- Raw app-server event envelope (see bridge.rs's `emit_event`) ----------
 

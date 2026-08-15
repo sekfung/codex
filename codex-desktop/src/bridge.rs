@@ -39,6 +39,10 @@ enum BridgeJob {
         request: ClientRequest,
         respond_to: oneshot::Sender<Result<JsonValue, String>>,
     },
+    RequestDetailed {
+        request: ClientRequest,
+        respond_to: oneshot::Sender<Result<JsonValue, RequestFailure>>,
+    },
     ResolveServerRequest {
         request_id: RequestId,
         result: JsonValue,
@@ -49,6 +53,36 @@ enum BridgeJob {
         message: String,
         respond_to: oneshot::Sender<Result<(), String>>,
     },
+}
+
+/// A failed request with its JSON-RPC error detail intact.
+///
+/// [`AppServerBridge::request`] flattens failures to a display string, which
+/// is all most callers need. Steering is the exception: the engine reports
+/// "this turn cannot be steered" through `error.data.codexErrorInfo` rather
+/// than the message, and a client that can't see it would silently drop the
+/// user's message instead of falling back to the queue.
+#[derive(Debug, Clone)]
+pub enum RequestFailure {
+    /// The server answered with a JSON-RPC error.
+    Server(JSONRPCErrorError),
+    /// The request never reached the server, or the bridge is gone.
+    Transport(String),
+}
+
+impl RequestFailure {
+    pub fn message(&self) -> String {
+        match self {
+            Self::Server(err) => format!("{} (code {})", err.message, err.code),
+            Self::Transport(err) => err.clone(),
+        }
+    }
+}
+
+impl From<RequestFailure> for String {
+    fn from(failure: RequestFailure) -> Self {
+        failure.message()
+    }
 }
 
 /// Handle stored in Tauri-managed state. Cheap to clone (just a channel
@@ -80,6 +114,25 @@ impl AppServerBridge {
         response
             .await
             .map_err(|_| "app-server bridge dropped the response channel".to_string())?
+    }
+
+    /// Like [`request`](Self::request) but keeps the JSON-RPC error intact.
+    /// Use this only where the caller genuinely branches on error detail;
+    /// otherwise `request` keeps call sites simpler.
+    pub async fn request_detailed(
+        &self,
+        request: ClientRequest,
+    ) -> Result<JsonValue, RequestFailure> {
+        let (respond_to, response) = oneshot::channel();
+        self.job_tx
+            .send(BridgeJob::RequestDetailed {
+                request,
+                respond_to,
+            })
+            .map_err(|_| RequestFailure::Transport("app-server bridge task is gone".to_string()))?;
+        response.await.map_err(|_| {
+            RequestFailure::Transport("app-server bridge dropped the response channel".to_string())
+        })?
     }
 
     pub async fn resolve_server_request(
@@ -166,6 +219,17 @@ async fn handle_job(client: &InProcessAppServerClient, job: BridgeJob) {
                 Ok(Ok(result)) => Ok(result),
                 Ok(Err(err)) => Err(format!("{} (code {})", err.message, err.code)),
                 Err(err) => Err(format!("transport error: {err}")),
+            };
+            let _ = respond_to.send(outcome);
+        }
+        BridgeJob::RequestDetailed {
+            request,
+            respond_to,
+        } => {
+            let outcome = match client.request(request).await {
+                Ok(Ok(result)) => Ok(result),
+                Ok(Err(err)) => Err(RequestFailure::Server(err)),
+                Err(err) => Err(RequestFailure::Transport(format!("transport error: {err}"))),
             };
             let _ = respond_to.send(outcome);
         }

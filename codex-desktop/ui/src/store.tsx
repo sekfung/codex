@@ -32,6 +32,7 @@ import type {
   PendingCommandExecutionApproval,
   PendingLogin,
   PendingPermissionsApproval,
+  PendingUserInputRequest,
   Project,
   QueuedSubmissionView,
   RateLimitSnapshot,
@@ -48,6 +49,7 @@ import type {
   TokenBudgetEdit,
   Turn,
   TurnStatus,
+  TurnSubmission,
 } from "./types";
 
 /// Whether this thread's pre-existing history has been pulled in via
@@ -268,6 +270,7 @@ type Action =
   | { type: "APPROVAL_REQUESTED"; threadId: string; approval: PendingApproval }
   | { type: "APPROVAL_RESOLVED"; threadId: string; requestId: unknown }
   | { type: "HISTORY_LOADING"; threadId: string }
+  | { type: "HISTORY_CLEARED"; threadId: string }
   | { type: "HISTORY_LOADED"; threadId: string; turns: Turn[] }
   | { type: "HISTORY_FAILED"; threadId: string; error: string }
   | { type: "APPROVAL_MODE_SET"; mode: ApprovalMode; overrides: boolean }
@@ -600,6 +603,24 @@ function reducer(state: State, action: Action): State {
         historyStatus: "loading",
         historyError: null,
       }));
+    // Drops every item this store holds for the thread, keeping the
+    // thread-level state (goal, queue, terminals) that a revert doesn't touch.
+    // Needed because `HISTORY_LOADED` *merges*: after `thread/revert` the
+    // dropped turns would otherwise stay on screen, since a reload can only
+    // add the retained ones back, never remove what is gone.
+    case "HISTORY_CLEARED":
+      return withThread(state, action.threadId, (thread) => ({
+        ...thread,
+        itemOrder: [],
+        items: {},
+        itemTurnIds: {},
+        turnStatus: {},
+        activeTurnId: null,
+        activeTurnStartedAtMs: null,
+        pendingApprovals: [],
+        historyStatus: "loading",
+        historyError: null,
+      }));
     case "HISTORY_LOADED":
       return withThread(state, action.threadId, (thread) => {
         // Bulk-load rather than replaying through the delta path: `turn.items`
@@ -771,6 +792,19 @@ interface StoreValue {
     fileRefs?: ComposerFileRef[],
     mentions?: ComposerMention[],
   ) => Promise<void>;
+  /// The composer's submit. Returns which path the engine took (steered into
+  /// the running turn, started a new one, or queued behind a turn that
+  /// refuses steering) so the UI can say what happened.
+  submitMessage: (
+    threadId: string,
+    text: string,
+    attachments?: ComposerAttachment[],
+    skills?: ComposerSkill[],
+    fileRefs?: ComposerFileRef[],
+    mentions?: ComposerMention[],
+  ) => Promise<TurnSubmission>;
+  /// `thread/revert` — conversation history only; files stay as written.
+  revertThread: (threadId: string, beforeTurnId: string) => Promise<void>;
   compactThread: (threadId: string) => Promise<void>;
   startReview: (
     threadId: string,
@@ -1175,6 +1209,59 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  /// The composer's one submit action. Steering is not a separate intent in
+  /// the engine's model — with a turn running the engine wants the message
+  /// folded into it, falling back to the queue only for turn kinds that
+  /// refuse steering. Rust decides, because the reasons arrive as error
+  /// strings and error `data`, and returns which path it took.
+  ///
+  /// The active turn id is read from the ref at call time rather than closed
+  /// over, so a turn that ends between paint and click is a `started` rather
+  /// than a steer aimed at a dead turn.
+  const submitMessage = useCallback(
+    async (
+      threadId: string,
+      text: string,
+      attachments: ComposerAttachment[] = [],
+      skills: ComposerSkill[] = [],
+      fileRefs: ComposerFileRef[] = [],
+      mentions: ComposerMention[] = [],
+    ) => {
+      const thread = threadsRef.current[threadId];
+      const activeTurnId = thread?.activeTurnId ?? null;
+      const running =
+        activeTurnId !== null && thread?.turnStatus[activeTurnId] === "inProgress";
+      return api.submitTurn(
+        threadId,
+        running ? activeTurnId : null,
+        text,
+        attachments,
+        skills,
+        fileRefs,
+        mentions,
+      );
+    },
+    [],
+  );
+
+  /// `thread/revert`. Conversation history only — files the agent wrote stay
+  /// written (see `src/thread_ops.rs`). The engine keeps thread state across
+  /// its internal reload, but this client's item store still holds the turns
+  /// that were just dropped, so re-resume to rehydrate what was retained.
+  const revertThread = useCallback(async (threadId: string, beforeTurnId: string) => {
+    await api.revertThread(threadId, beforeTurnId);
+    // Clear before reloading. `HISTORY_LOADED` merges, so without this the
+    // turns the engine just dropped would stay on screen; `thread/resume`
+    // then returns the retained history in one call.
+    dispatch({ type: "HISTORY_CLEARED", threadId });
+    try {
+      const response = await api.resumeThread(threadId);
+      dispatch({ type: "HISTORY_LOADED", threadId, turns: response.thread?.turns ?? [] });
+    } catch (error) {
+      dispatch({ type: "HISTORY_FAILED", threadId, error: String(error) });
+    }
+  }, []);
+
   /// `thread/compact/start`. The running flag is cleared by the
   /// `thread/compacted` notification, not here — compaction continues
   /// server-side after this call returns.
@@ -1525,6 +1612,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       removeProject,
       startNewThread,
       sendMessage,
+      submitMessage,
+      revertThread,
       compactThread,
       startReview,
       refetchSkills,
@@ -1570,6 +1659,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       removeProject,
       startNewThread,
       sendMessage,
+      submitMessage,
+      revertThread,
       compactThread,
       startReview,
       refetchSkills,
@@ -1905,6 +1996,25 @@ function handleServerRequest(
         permissions: p.permissions as PendingPermissionsApproval["permissions"],
       },
     });
+  } else if (request.method === "item/tool/requestUserInput") {
+    // A tool is asking the user a question. Unhandled, this blocks the turn
+    // forever with nothing on screen — it is a server *request*, so the
+    // engine waits for a response rather than moving on.
+    dispatch({
+      type: "APPROVAL_REQUESTED",
+      threadId: base.threadId,
+      approval: {
+        ...base,
+        kind: "userInput",
+        questions: (p.questions ?? []) as PendingUserInputRequest["questions"],
+        // Absent means blocking: the protocol's own deserializer defaults
+        // `isBlocking` to true when the field is missing.
+        isBlocking: p.isBlocking === undefined ? true : Boolean(p.isBlocking),
+      },
+    });
+  } else {
+    // Better a console warning than a turn that hangs with no explanation.
+    tracingWarn(`unhandled server request: ${request.method}`);
   }
 }
 

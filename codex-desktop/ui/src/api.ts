@@ -40,6 +40,8 @@ import type {
   ThreadResumeResponse,
   ThreadSearchResponse,
   TokenBudgetEdit,
+  TurnSubmission,
+  UserInputAnswerDraft,
 } from "./types";
 
 /// `thread/fork` returns the same envelope shape as resume, plus more fields
@@ -166,8 +168,39 @@ export const sendTurn = (
   mentions: ComposerMention[] = [],
 ) =>
   invoke<unknown>("send_turn", { threadId, text, attachments, skills, fileRefs, mentions });
+
+/// Submits composer input, letting Rust pick steer / start / queue the way the
+/// TUI does (`tui/src/app/thread_routing.rs`). Pass the turn this client
+/// believes is running, or `null` if it believes the thread is idle; the
+/// engine's answer decides what actually happens, and the returned outcome
+/// says which.
+export const submitTurn = (
+  threadId: string,
+  activeTurnId: string | null,
+  text: string,
+  attachments: ComposerAttachment[] = [],
+  skills: ComposerSkill[] = [],
+  fileRefs: ComposerFileRef[] = [],
+  mentions: ComposerMention[] = [],
+) =>
+  invoke<TurnSubmission>("submit_turn", {
+    threadId,
+    activeTurnId,
+    text,
+    attachments,
+    skills,
+    fileRefs,
+    mentions,
+  });
+
 export const interruptTurn = (threadId: string, turnId: string) =>
   invoke<unknown>("interrupt_turn", { threadId, turnId });
+
+/// `thread/revert` — drops `beforeTurnId` and every later turn from the
+/// thread's history. Conversation only: files the agent already wrote are
+/// untouched (see `src/thread_ops.rs`).
+export const revertThread = (threadId: string, beforeTurnId: string) =>
+  invoke<unknown>("revert_thread", { threadId, beforeTurnId });
 
 // -- Composer capability -----------------------------------------------------
 
@@ -298,6 +331,14 @@ export const resolvePermissionsApproval = (
 
 export const rejectApproval = (requestId: unknown, message: string) =>
   invoke<void>("reject_approval", { requestId, message });
+
+/// Answers `item/tool/requestUserInput`. Rust encodes the drafts into the
+/// protocol's answer map, including the `user_note:` prefix the engine uses to
+/// tell free text from a chosen option label.
+export const resolveUserInputRequest = (
+  requestId: unknown,
+  answers: UserInputAnswerDraft[],
+) => invoke<void>("resolve_user_input_request", { requestId, answers });
 
 // -- MCP servers / hooks / plugins / account (settings 集成 + 编码 screens) ---
 // All of these are thin client calls onto app-server RPCs (ADR-0021).

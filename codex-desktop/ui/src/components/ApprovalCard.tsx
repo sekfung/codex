@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { FileDiff, KeyRound, Terminal } from "lucide-react";
+import { FileDiff, KeyRound, MessageCircleQuestion, Terminal } from "lucide-react";
 
 import { useStore } from "../store";
 import * as api from "../api";
@@ -11,7 +11,9 @@ import type {
   PendingCommandExecutionApproval,
   PendingFileChangeApproval,
   PendingPermissionsApproval,
+  PendingUserInputRequest,
   PermissionProfile,
+  UserInputAnswerDraft,
 } from "../types";
 import { Button } from "@/components/ui/button";
 
@@ -49,6 +51,9 @@ export function ApprovalCard({ approval }: { approval: PendingApproval }) {
   }
   if (approval.kind === "fileChange") {
     return <FileChangeApproval approval={approval} {...shared} />;
+  }
+  if (approval.kind === "userInput") {
+    return <UserInputRequestCard request={approval} {...shared} />;
   }
   return <PermissionsApproval approval={approval} {...shared} />;
 }
@@ -404,4 +409,123 @@ function formatNetworkAmendment(amendment: NetworkPolicyAmendment): string {
   return amendment.action === "allow"
     ? `始终允许访问 ${amendment.host}`
     : `始终禁止访问 ${amendment.host}`;
+}
+
+/// `item/tool/requestUserInput` — a tool asking the user a question.
+///
+/// Rendered inline like the approval cards because it is the same class of
+/// thing: the turn waits on this client. Answers are collected per question
+/// and encoded in Rust (`src/user_input.rs`), which owns the two conventions
+/// that are easy to get silently wrong — a chosen option answers with its
+/// label, and free text carries a `user_note:` prefix.
+function UserInputRequestCard({
+  request,
+  busy,
+  error,
+  resolve,
+}: DecisionProps & { request: PendingUserInputRequest }) {
+  const [selected, setSelected] = useState<Record<string, string>>({});
+  const [notes, setNotes] = useState<Record<string, string>>({});
+
+  const drafts: UserInputAnswerDraft[] = request.questions.map((question) => ({
+    questionId: question.id,
+    selectedLabel: selected[question.id] ?? null,
+    note: notes[question.id] ?? null,
+  }));
+
+  // The protocol has no "decline" verb — an unanswered question is submitted
+  // as an empty answer list, which is what the TUI does too. So skipping is
+  // just submitting with nothing filled in, and it still unblocks the turn.
+  const anyAnswer = drafts.some((draft) => draft.selectedLabel || draft.note?.trim());
+
+  return (
+    <CardShell Icon={MessageCircleQuestion} title="Codex 需要你的补充信息">
+      {!request.isBlocking && (
+        <Detail>这是非阻塞询问，不回答也不会卡住当前回合。</Detail>
+      )}
+      <div className="flex flex-col gap-3">
+        {request.questions.map((question) => {
+          const options = question.options ?? [];
+          const hasOptions = options.length > 0;
+          return (
+            <div key={question.id} className="flex flex-col gap-1.5">
+              <div>
+                <div className="text-[13px] font-medium">{question.header}</div>
+                <div className="text-xs text-muted-foreground">{question.question}</div>
+              </div>
+
+              {hasOptions && (
+                <div className="flex flex-wrap gap-1.5">
+                  {options.map((option) => {
+                    const active = selected[question.id] === option.label;
+                    return (
+                      <Button
+                        key={option.label}
+                        size="sm"
+                        variant={active ? "default" : "outline"}
+                        disabled={busy}
+                        title={option.description}
+                        onClick={() =>
+                          setSelected((current) => ({
+                            ...current,
+                            // Clicking the active option clears it, so a
+                            // mis-click isn't a decision you can't undo.
+                            [question.id]: active ? "" : option.label,
+                          }))
+                        }
+                      >
+                        {option.label}
+                      </Button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Free text when there are no options, and alongside them when
+                  the question is marked `isOther`. */}
+              {(!hasOptions || question.isOther) && (
+                <input
+                  type={question.isSecret ? "password" : "text"}
+                  value={notes[question.id] ?? ""}
+                  disabled={busy}
+                  placeholder={hasOptions ? "其他（补充说明）" : "输入回答"}
+                  className="h-8 w-full rounded-md border border-input bg-background px-2 text-[13px] placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  onChange={(event) =>
+                    setNotes((current) => ({ ...current, [question.id]: event.target.value }))
+                  }
+                />
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <Actions>
+        <Button
+          size="sm"
+          disabled={busy || !anyAnswer}
+          onClick={() => resolve(() => api.resolveUserInputRequest(request.requestId, drafts))}
+        >
+          提交
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={busy}
+          title="不回答并让当前回合继续"
+          onClick={() =>
+            resolve(() =>
+              api.resolveUserInputRequest(
+                request.requestId,
+                request.questions.map((question) => ({ questionId: question.id })),
+              ),
+            )
+          }
+        >
+          跳过
+        </Button>
+      </Actions>
+      <CardError error={error} />
+    </CardShell>
+  );
 }
