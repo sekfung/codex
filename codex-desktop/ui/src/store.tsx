@@ -28,17 +28,29 @@ import type {
   TurnSubmission,
 } from "./types";
 import { initialState, reducer } from "./store/reducer";
-import type { Action, State, ThreadState } from "./store/reducer";
+import type { Action, State, ThreadState, ThreadTrailEntry } from "./store/reducer";
 import { handleEvent, pushNotice, tracingWarn } from "./store/events";
+import { agentLabel } from "./lib/threads";
 
 // Re-exported: components import the thread shape from `./store`, and the
 // split is an internal reorganisation rather than a change to that surface.
-export type { ThreadState } from "./store/reducer";
+export type { ThreadState, ThreadTrailEntry } from "./store/reducer";
 interface StoreValue {
   state: State;
   dispatch: React.Dispatch<Action>;
   setActiveProject: (path: string | null) => Promise<void>;
   setActiveThread: (threadId: string | null) => Promise<void>;
+  /**
+   * Navigate into a thread the sidebar cannot list (a sub-agent's own
+   * thread, or a detached review), remembering the way back.
+   */
+  drillIntoThread: (
+    threadId: string,
+    fromThreadId: string,
+    reason: "subAgent" | "review",
+  ) => Promise<void>;
+  /** Step back out of the most recent drill-in. */
+  leaveThread: () => Promise<void>;
   addProject: (path: string) => Promise<void>;
   removeProject: (id: string) => Promise<void>;
   startNewThread: (cwd: string) => Promise<void>;
@@ -166,6 +178,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // change (they'd otherwise re-run effects that depend on their identity).
   const threadsRef = useRef<Record<string, ThreadState>>({});
   threadsRef.current = state.threads;
+  const threadTrailRef = useRef<ThreadTrailEntry[]>([]);
+  threadTrailRef.current = state.threadTrail;
   const approvalModeRef = useRef<ApprovalMode>(initialState.approvalMode);
   approvalModeRef.current = state.approvalMode;
   const activeThreadIdRef = useRef<string | null>(null);
@@ -485,10 +499,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // session would render as a blank pane. `thread/resume` both loads the
   // thread server-side (so turns can be sent to it) and returns its full
   // history in `thread.turns`.
-  const setActiveThread = useCallback(async (threadId: string | null) => {
-    dispatch({ type: "ACTIVE_THREAD_SET", threadId });
-    if (!threadId) return;
-
+  /**
+   * Resumes a thread and loads its history, without touching which thread is
+   * active or how the user got there. Shared by plain selection and by
+   * drill-in, so both reach a thread the same way.
+   */
+  const loadThreadHistory = useCallback(async (threadId: string) => {
     const existing = threadsRef.current[threadId];
     if (existing && (existing.historyStatus === "loaded" || existing.historyStatus === "loading")) {
       return;
@@ -509,6 +525,52 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       dispatch({ type: "HISTORY_FAILED", threadId, error: String(error) });
     }
   }, []);
+
+  const setActiveThread = useCallback(
+    async (threadId: string | null) => {
+      dispatch({ type: "ACTIVE_THREAD_SET", threadId });
+      if (!threadId) return;
+      await loadThreadHistory(threadId);
+    },
+    [loadThreadHistory],
+  );
+
+  /**
+   * Navigates *into* a thread the sidebar cannot list, remembering the way
+   * back.
+   *
+   * Sub-agent and detached-review threads are excluded from `thread/list` by
+   * the protocol's `sourceKinds` default (ADR-0017), so plain
+   * `setActiveThread` would leave the user on a thread with nothing in the
+   * sidebar to return to. Loading history reuses `setActiveThread`'s resume
+   * path; only the trail bookkeeping differs.
+   */
+  const drillIntoThread = useCallback(
+    async (threadId: string, fromThreadId: string, reason: "subAgent" | "review") => {
+      dispatch({ type: "THREAD_DRILLED_INTO", threadId, fromThreadId, reason });
+      await loadThreadHistory(threadId);
+      if (reason !== "subAgent") return;
+      try {
+        const info = await api.readAgentThread(threadId);
+        const label = agentLabel(info);
+        if (label) dispatch({ type: "AGENT_INFO_LOADED", threadId, label });
+      } catch {
+        // The breadcrumb falls back to a generic label; a failed *label*
+        // lookup must not block navigation that already succeeded.
+      }
+    },
+    [loadThreadHistory],
+  );
+
+  /**
+   * Steps back out of the most recent drill-in, loading the parent's history
+   * if it has since been dropped.
+   */
+  const leaveThread = useCallback(async () => {
+    const target = threadTrailRef.current.at(-1)?.fromThreadId;
+    dispatch({ type: "THREAD_TRAIL_POPPED" });
+    if (target) await loadThreadHistory(target);
+  }, [loadThreadHistory]);
 
   const addProject = useCallback(async (path: string) => {
     const project = await api.addProject(path);
@@ -778,10 +840,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const response = await api.startReview(threadId, target, delivery);
       const reviewThreadId = response?.reviewThreadId;
       if (delivery === "detached" && reviewThreadId && reviewThreadId !== threadId) {
-        await setActiveThread(reviewThreadId);
+        await drillIntoThread(reviewThreadId, threadId, "review");
       }
     },
-    [setActiveThread],
+    [drillIntoThread],
   );
 
   /**
@@ -1047,6 +1109,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       dispatch,
       setActiveProject,
       setActiveThread,
+      drillIntoThread,
+      leaveThread,
       addProject,
       removeProject,
       startNewThread,
@@ -1096,6 +1160,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       state,
       setActiveProject,
       setActiveThread,
+      drillIntoThread,
+      leaveThread,
       addProject,
       removeProject,
       startNewThread,

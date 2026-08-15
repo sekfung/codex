@@ -8,6 +8,7 @@
 //! rendering richness described in the later ADRs (0013-0018) live entirely
 //! in `ui/` — this file only wires the backend.
 
+mod agents;
 mod approval_mode;
 mod bridge;
 mod cmd;
@@ -299,6 +300,7 @@ fn main() {
             commands::start_thread,
             commands::set_approval_mode,
             commands::thread_settings_indicators,
+            agents::read_agent_thread,
             commands::resume_thread,
             commands::fork_thread,
             composer::send_turn,

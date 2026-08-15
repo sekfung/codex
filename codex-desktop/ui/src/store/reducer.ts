@@ -51,6 +51,20 @@ import type {
  */
 export type HistoryStatus = "idle" | "loading" | "loaded" | "error";
 
+/**
+ * One step of "I navigated into this thread from that one".
+ *
+ * `reason` is what the breadcrumb says, since arriving at a review thread and
+ * arriving at a sub-agent thread want different words.
+ */
+export interface ThreadTrailEntry {
+  threadId: string;
+  fromThreadId: string;
+  reason: "subAgent" | "review";
+  /** Nickname or role when known; the raw id is a poor label. */
+  label?: string;
+}
+
 export interface ThreadState {
   itemOrder: string[];
   items: Record<string, ThreadItem>;
@@ -180,6 +194,19 @@ export interface State {
   requiresOpenaiAuth: boolean;
   rateLimits: RateLimitSnapshot | null;
   activeThreadId: string | null;
+  /**
+   * Threads navigated *into* from another thread, most recent last, each with
+   * the thread it was reached from.
+   *
+   * Sub-agent threads and detached review threads are excluded from the
+   * sidebar's `thread/list` by the protocol's `sourceKinds` default
+   * (ADR-0017), so once the main pane shows one there is nothing in the
+   * sidebar to click to get back — the user is stranded on a thread the app
+   * cannot list. This trail is the way back, and it is desktop chrome with no
+   * engine counterpart (ADR-0021's third admissible case), like the pinned
+   * Project list.
+   */
+  threadTrail: ThreadTrailEntry[];
   threads: Record<string, ThreadState>;
   /**
    * ADR-0016 layer 1. Held app-level rather than per-thread so switching
@@ -328,7 +355,16 @@ export type Action =
   | { type: "ACCOUNT_PLAN_UPDATED"; planType: string | null }
   | { type: "RATE_LIMITS_LOADED"; rateLimits: RateLimitSnapshot }
   | { type: "RATE_LIMITS_MERGED"; rateLimits: RateLimitSnapshot }
-  | { type: "ACTIVE_THREAD_SET"; threadId: string | null }
+  | { type: "ACTIVE_THREAD_SET"; threadId: string | null; keepTrail?: boolean }
+  | {
+      type: "THREAD_DRILLED_INTO";
+      threadId: string;
+      fromThreadId: string;
+      reason: ThreadTrailEntry["reason"];
+      label?: string;
+    }
+  | { type: "THREAD_TRAIL_POPPED" }
+  | { type: "AGENT_INFO_LOADED"; threadId: string; label: string }
   | { type: "ITEM_UPSERT_DELTA"; threadId: string; turnId: string; itemId: string; deltaText: string }
   | {
       type: "ITEM_STARTED";
@@ -586,8 +622,56 @@ export function reducer(state: State, action: Action): State {
         ...thread,
         goal: action.goal,
       }));
-    case "ACTIVE_THREAD_SET":
-      return { ...state, activeThreadId: action.threadId };
+    case "ACTIVE_THREAD_SET": {
+      // Selecting a thread from the sidebar, search, or a new/forked thread is
+      // free navigation: the user reached somewhere they can leave again, so
+      // any drill-in trail is stale and a "back" button offering to jump from
+      // it would point somewhere they already left.
+      //
+      // `keepTrail` is set when the navigation *is* the drill-in (or the pop
+      // out of one) and the trail is being managed by that action instead.
+      if (action.keepTrail) {
+        return { ...state, activeThreadId: action.threadId };
+      }
+      return { ...state, activeThreadId: action.threadId, threadTrail: [] };
+    }
+    case "THREAD_DRILLED_INTO": {
+      // Re-entering a thread already on the trail returns to it rather than
+      // stacking a second copy, so repeatedly clicking the same agent cannot
+      // grow the trail without bound.
+      const existing = state.threadTrail.findIndex((entry) => entry.threadId === action.threadId);
+      const base =
+        existing === -1 ? state.threadTrail : state.threadTrail.slice(0, existing);
+      return {
+        ...state,
+        activeThreadId: action.threadId,
+        threadTrail: [
+          ...base,
+          {
+            threadId: action.threadId,
+            fromThreadId: action.fromThreadId,
+            reason: action.reason,
+            label: action.label,
+          },
+        ],
+      };
+    }
+    case "THREAD_TRAIL_POPPED": {
+      const last = state.threadTrail.at(-1);
+      if (!last) return state;
+      return {
+        ...state,
+        activeThreadId: last.fromThreadId,
+        threadTrail: state.threadTrail.slice(0, -1),
+      };
+    }
+    case "AGENT_INFO_LOADED":
+      return {
+        ...state,
+        threadTrail: state.threadTrail.map((entry) =>
+          entry.threadId === action.threadId ? { ...entry, label: action.label } : entry,
+        ),
+      };
     case "ITEM_UPSERT_DELTA":
       return withThread(state, action.threadId, (thread) => {
         const existing = thread.items[action.itemId];
@@ -901,6 +985,7 @@ export const initialState: State = {
   requiresOpenaiAuth: false,
   rateLimits: null,
   activeThreadId: null,
+  threadTrail: [],
   threads: {},
   // Matches the Official App's default selection in the reference
   // screenshots. Replaced at startup by the persisted default from

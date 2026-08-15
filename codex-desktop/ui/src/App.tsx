@@ -8,6 +8,7 @@ import { Sidebar } from "./components/Sidebar";
 import { ChatStream } from "./components/ChatStream";
 import { Composer } from "./components/Composer";
 import { NoticeBar } from "./components/NoticeBar";
+import { ThreadTrailBar } from "./components/ThreadTrailBar";
 import { StartupFailure } from "./components/StartupFailure";
 import { UsageNotice } from "./components/UsageNotice";
 import { SettingsShell } from "./components/settings/SettingsShell";
@@ -34,6 +35,7 @@ function MainPane() {
 
   return (
     <main className="flex min-w-0 flex-1 flex-col">
+      <ThreadTrailBar />
       <ChatStream threadId={threadId} />
       <NoticeBar />
       <UsageNotice />

@@ -10,13 +10,14 @@ import {
   Sparkles,
   Terminal,
   Undo2,
-  Users,
 } from "lucide-react";
 
 import { useStore } from "../store";
 import type { ThreadState } from "../store";
 import type {
   AgentMessageItem,
+  CollabAgentToolCallItem,
+  SubAgentActivityItem,
   CommandExecutionItem,
   FileChangeItem,
   ReasoningItem,
@@ -24,6 +25,7 @@ import type {
   UserMessageItem,
 } from "../types";
 import { ApprovalCard } from "./ApprovalCard";
+import { CollabAgentToolCallView, SubAgentActivityView } from "./SubAgentViews";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -190,11 +192,11 @@ function ItemRenderer({
         />
       );
     case "collabAgentToolCall":
-      // Multi-agent drill-in (ADR-0014) is an open UI question per ADR-0017 —
-      // this placeholder doesn't navigate anywhere yet.
-      return <GenericActivityRow Icon={Users} label="子智能体处理中…" />;
+      return (
+        <CollabAgentToolCallView item={item as CollabAgentToolCallItem} threadId={threadId} />
+      );
     case "subAgentActivity":
-      return <GenericActivityRow Icon={Users} label={`子智能体：${String(item.kind ?? "")}`} />;
+      return <SubAgentActivityView item={item as SubAgentActivityItem} threadId={threadId} />;
     default:
       if (GENERIC_TIER_TYPES.has(item.type)) {
         return <GenericActivityRow Icon={Sparkles} label={item.type} />;

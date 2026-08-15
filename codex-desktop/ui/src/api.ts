@@ -153,6 +153,24 @@ export const searchThreads = (searchTerm: string, limit?: number) =>
 
 // -- Account (read-only: no billing, upgrade or top-up path exists) ----------
 
+/**
+ * Identity of a sub-agent thread, for labelling drill-ins.
+ *
+ * Flattened in Rust (`src/agents.rs`) rather than returned as a `Thread`: that
+ * type carries a turns array, a tagged `SessionSource`, and a
+ * `ThreadHistoryMode` whose identically-named twin in `codex_protocol` uses a
+ * different serde casing. Four strings is all this needs.
+ */
+export interface AgentThreadInfo {
+  id: string;
+  nickname?: string | null;
+  role?: string | null;
+  name?: string | null;
+}
+
+export const readAgentThread = (threadId: string) =>
+  invoke<AgentThreadInfo>("read_agent_thread", { threadId });
+
 export const readAccount = () => invoke<GetAccountResponse>("read_account");
 export const readAccountRateLimits = () =>
   invoke<GetAccountRateLimitsResponse>("read_account_rate_limits");

@@ -69,18 +69,55 @@ export interface GenericToolItem extends BaseItem {
 }
 
 // Multi-agent (ADR-0014).
+/** `CollabAgentTool` — which collab operation the parent invoked. */
+export type CollabAgentTool =
+  | "spawnAgent"
+  | "sendInput"
+  | "resumeAgent"
+  | "wait"
+  | "closeAgent";
+
+export type CollabAgentToolCallStatus = "inProgress" | "completed" | "failed";
+
+/** `CollabAgentStatus` — last known liveness of a target agent. */
+export type CollabAgentStatus =
+  | "pendingInit"
+  | "running"
+  | "interrupted"
+  | "completed"
+  | "errored"
+  | "shutdown"
+  | "notFound";
+
+/** `CollabAgentState`: a status plus, for completed/errored, its message. */
+export interface CollabAgentState {
+  status: CollabAgentStatus;
+  message?: string | null;
+}
+
 export interface CollabAgentToolCallItem extends BaseItem {
   type: "collabAgentToolCall";
+  tool: CollabAgentTool;
+  status: CollabAgentToolCallStatus;
   senderThreadId: string;
+  /** For a spawn, the newly spawned agent; otherwise the targets. */
   receiverThreadIds: string[];
-  status: string;
+  prompt?: string | null;
+  model?: string | null;
+  reasoningEffort?: string | null;
+  /** Keyed by thread id. Populated for `wait` and `resumeAgent` outcomes. */
+  agentsStates: Record<string, CollabAgentState>;
   [key: string]: unknown;
 }
+
+export type SubAgentActivityKind = "started" | "interacted" | "interrupted";
 
 export interface SubAgentActivityItem extends BaseItem {
   type: "subAgentActivity";
   agentThreadId: string;
-  kind: string;
+  kind: SubAgentActivityKind;
+  /** The agent definition's path, which is what the TUI names in its summary. */
+  agentPath: string;
   [key: string]: unknown;
 }
 
