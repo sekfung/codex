@@ -31,6 +31,7 @@ import { MemoriesSettings } from "./MemoriesSettings";
 import { PluginsSettings } from "./PluginsSettings";
 import { SkillsSettings } from "./SkillsSettings";
 import { EnvironmentSettings } from "./EnvironmentSettings";
+import { GitSettings } from "./GitSettings";
 import { ExperimentalSettings } from "./ExperimentalSettings";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -88,7 +89,10 @@ const NAV_GROUPS: NavGroup[] = [
       // Also our placement: `/experimental` is a TUI command with no nav
       // counterpart in the screenshots. See ExperimentalSettings.tsx.
       { id: "experimental", label: "实验性功能", Icon: FlaskConical, ready: true },
-      { id: "git", label: "Git", Icon: GitBranch },
+      // Enabled, but as an explanatory screen rather than a control panel:
+      // none of the Official App's seven Git controls has a config key or RPC
+      // in this repo. See GitSettings.tsx for the per-control finding.
+      { id: "git", label: "Git", Icon: GitBranch, ready: true },
       { id: "environment", label: "环境", Icon: Terminal, ready: true },
     ],
   },
@@ -188,6 +192,7 @@ export function SettingsShell() {
           {active === "skills" && <SkillsSettings />}
           {active === "experimental" && <ExperimentalSettings />}
           {active === "environment" && <EnvironmentSettings />}
+          {active === "git" && <GitSettings />}
         </div>
       </main>
     </div>
