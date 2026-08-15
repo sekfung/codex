@@ -1,4 +1,5 @@
 use super::*;
+use codex_vcs_utils::VcsKind;
 use pretty_assertions::assert_eq;
 
 fn abs(path: &std::path::Path) -> AbsolutePathBuf {
@@ -89,10 +90,4 @@ async fn nested_working_copy_resolves_to_the_inner_root() {
             .expect("canonicalize"),
         inner.canonicalize().expect("canonicalize")
     );
-}
-
-#[test]
-fn labels_name_the_system_that_answered() {
-    assert_eq!(VcsKind::Git.label(), "Git repo");
-    assert_eq!(VcsKind::Subversion.label(), "SVN working copy");
 }

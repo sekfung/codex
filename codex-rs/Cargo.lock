@@ -2963,6 +2963,7 @@ dependencies = [
  "codex-utils-pty",
  "codex-utils-stream-parser",
  "codex-utils-string",
+ "codex-vcs-utils",
  "codex-web-search-extension",
  "codex-windows-sandbox",
  "core_test_support",
@@ -4890,6 +4891,21 @@ version = "0.0.0"
 dependencies = [
  "pretty_assertions",
  "v8",
+]
+
+[[package]]
+name = "codex-vcs-utils"
+version = "0.0.0"
+dependencies = [
+ "codex-file-system",
+ "codex-git-utils",
+ "codex-utils-absolute-path",
+ "codex-utils-path-uri",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
