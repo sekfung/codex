@@ -46,7 +46,10 @@ import type {
   ThreadHistoryMode,
   ThreadItem,
   ThreadSearchResult,
+  ThreadSettingsIndicators,
   ThreadSummary,
+  ImportProgress,
+  ImportTypeResult,
   ThreadTokenUsage,
   TokenBudgetEdit,
   Turn,
@@ -195,6 +198,11 @@ interface State {
   /// All were previously discarded, so a bad config or a silently swapped
   /// model produced no visible sign at all.
   notices: Notice[];
+  /// External-agent config imports, keyed by the `importId` the request
+  /// returns. The request's response carries only that id — the per-item
+  /// outcomes arrive on `externalAgentConfig/import/progress`/`completed`, so
+  /// without this the import screen could only ever say "started".
+  imports: Record<string, ImportProgress>;
   /// Model catalog from `model/list`, loaded once at startup. Empty until it
   /// resolves (or if it fails — the picker then simply has nothing to offer,
   /// which is better than blocking the composer).
@@ -298,6 +306,17 @@ type Action =
     }
   | { type: "HISTORY_FAILED"; threadId: string; error: string }
   | { type: "APPROVAL_MODE_SET"; mode: ApprovalMode; overrides: boolean }
+  | {
+      type: "THREAD_SETTINGS_APPLIED";
+      threadId: string;
+      indicators: ThreadSettingsIndicators;
+    }
+  | {
+      type: "IMPORT_PROGRESS";
+      importId: string;
+      results: ImportTypeResult[];
+      done: boolean;
+    }
   | { type: "MODELS_LOADED"; models: Model[] }
   | { type: "COLLABORATION_MODES_LOADED"; modes: CollaborationModePreset[] }
   | { type: "COLLABORATION_MODE_SET"; mode: string }
@@ -698,6 +717,33 @@ function reducer(state: State, action: Action): State {
         approvalMode: action.mode,
         approvalModeOverridden: action.overrides || state.approvalModeOverridden,
       };
+    case "IMPORT_PROGRESS":
+      return {
+        ...state,
+        imports: {
+          ...state.imports,
+          [action.importId]: { results: action.results, done: action.done },
+        },
+      };
+    case "THREAD_SETTINGS_APPLIED": {
+      // The composer's indicators are app-level, so only the thread on screen
+      // may drive them — a background thread's settings changing must not
+      // relabel the one the user is looking at.
+      if (action.threadId !== state.activeThreadId) return state;
+      // `approvalMode` stays null when the thread's settings aren't one of the
+      // three presets; leaving the previous label would be a worse lie than
+      // leaving it alone, but there is no honest third label to show, so the
+      // indicator keeps its last value and the settings screen remains the
+      // place that reports the real config.
+      return {
+        ...state,
+        approvalMode: action.indicators.approvalMode ?? state.approvalMode,
+        modelSelection: {
+          model: action.indicators.model,
+          effort: action.indicators.effort ?? null,
+        },
+      };
+    }
     case "MODELS_LOADED": {
       // Adopt the catalog's default as the initial selection, so the picker
       // shows what the server would actually use rather than a blank label.
@@ -804,6 +850,7 @@ const initialState: State = {
   configRequirements: null,
   settingsScreen: null,
   notices: [],
+  imports: {},
   models: [],
   // Null until `model/list` or `config/read` resolves; null means "let the
   // server decide".
@@ -959,7 +1006,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   pendingLoginRef.current = state.pendingLogin;
 
   useEffect(() => {
-    api.listProjects().then((projects) => dispatch({ type: "PROJECTS_LOADED", projects }));
+    api
+      .listProjects()
+      .then((projects) => dispatch({ type: "PROJECTS_LOADED", projects }))
+      // The pinned Project list is this app's own state (ADR-0012) and the
+      // sidebar's whole content. Failing silently is indistinguishable from
+      // "you have never opened a Project", which would invite the user to
+      // re-add Projects they already have.
+      .catch((error) =>
+        pushNotice(dispatch, {
+          severity: "error",
+          source: "list_projects",
+          message: "无法读取项目列表",
+          details: String(error),
+        }),
+      );
   }, []);
 
   useEffect(() => {
@@ -1065,6 +1126,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       .catch((error) => tracingWarn(`app/list failed: ${String(error)}`));
   }, []);
 
+  /// Corrects the composer's indicators from `thread/settings/updated`. Also
+  /// fires for this client's own writes, so the indicator reflects what the
+  /// server actually applied rather than what was optimistically requested.
+  const applyThreadSettings = useCallback((threadId: string, settings: unknown) => {
+    api
+      .threadSettingsIndicators(settings)
+      .then((indicators) =>
+        dispatch({ type: "THREAD_SETTINGS_APPLIED", threadId, indicators }),
+      )
+      .catch((error) => tracingWarn(`thread/settings/updated mapping failed: ${String(error)}`));
+  }, []);
+
   const computeContextUsage = useCallback((threadId: string, usage: ThreadTokenUsage) => {
     api
       .contextUsage(
@@ -1109,6 +1182,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           refetchSkills,
           refetchApps,
           computeContextUsage,
+          applyThreadSettings,
           refetchQueue: (threadId) => {
             refetchQueue(threadId).catch((error) =>
               tracingWarn(`thread/queue/list failed: ${String(error)}`),
@@ -1120,7 +1194,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         unlisten = fn;
       });
     return () => unlisten?.();
-  }, [refetchAccount, refetchSkills, refetchApps, computeContextUsage, refetchQueue]);
+  }, [
+    refetchAccount,
+    refetchSkills,
+    refetchApps,
+    computeContextUsage,
+    applyThreadSettings,
+    refetchQueue,
+  ]);
 
   useEffect(() => {
     refetchAccount();
@@ -1166,13 +1247,25 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     dispatch({ type: "ACTIVE_PROJECT_SET", path });
     dispatch({ type: "ACTIVE_THREAD_SET", threadId: null });
     if (!path) return;
-    const response = await api.listThreads(path);
-    dispatch({
-      type: "THREADS_LOADED",
-      projectPath: path,
-      threads: response.data ?? [],
-      archived: false,
-    });
+    try {
+      const response = await api.listThreads(path);
+      dispatch({
+        type: "THREADS_LOADED",
+        projectPath: path,
+        threads: response.data ?? [],
+        archived: false,
+      });
+    } catch (error) {
+      // Selecting a Project whose threads fail to load would otherwise show
+      // an empty list — the same "silent absence" shape that made a
+      // pre-existing conversation render as a blank pane.
+      pushNotice(dispatch, {
+        severity: "error",
+        source: "thread/list",
+        message: "无法读取该项目的对话列表",
+        details: String(error),
+      });
+    }
   }, []);
 
   // Threads picked from the sidebar have no items in this store yet — the
@@ -1211,8 +1304,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const removeProject = useCallback(async (id: string) => {
-    await api.removeProject(id);
-    dispatch({ type: "PROJECT_REMOVED", id });
+    try {
+      await api.removeProject(id);
+      dispatch({ type: "PROJECT_REMOVED", id });
+    } catch (error) {
+      // Only dispatch on success: a row that vanishes from a failed removal
+      // would reappear on the next launch with no explanation.
+      pushNotice(dispatch, {
+        severity: "error",
+        source: "remove_project",
+        message: "无法从侧边栏移除该项目",
+        details: String(error),
+      });
+    }
   }, []);
 
   const startNewThread = useCallback(async (cwd: string) => {
@@ -1526,13 +1630,24 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const setArchivedVisible = useCallback(async (projectPath: string, visible: boolean) => {
     dispatch({ type: "ARCHIVED_VISIBILITY_SET", projectPath, visible });
     if (!visible) return;
-    const list = await api.listThreads(projectPath, true);
-    dispatch({
-      type: "THREADS_LOADED",
-      projectPath,
-      threads: list.data ?? [],
-      archived: true,
-    });
+    try {
+      const list = await api.listThreads(projectPath, true);
+      dispatch({
+        type: "THREADS_LOADED",
+        projectPath,
+        threads: list.data ?? [],
+        archived: true,
+      });
+    } catch (error) {
+      // An expanded-but-empty archived section reads as "nothing archived",
+      // which is exactly wrong when the list simply failed to load.
+      pushNotice(dispatch, {
+        severity: "error",
+        source: "thread/list",
+        message: "无法读取已归档的对话",
+        details: String(error),
+      });
+    }
   }, []);
 
   const setSearchTerm = useCallback((term: string) => {
@@ -1810,6 +1925,12 @@ interface NotificationEffects {
   /// `skills/changed` it reports *that* the queue changed, never how — so a
   /// re-list is the only correct response.
   refetchQueue: (threadId: string) => void;
+  /// `thread/settings/updated` carries the full `ThreadSettings`, so the
+  /// composer's indicators can be corrected from the server's own view rather
+  /// than left showing what this client optimistically asked for. Mapped in
+  /// Rust: `AskForApproval` has a `Granular { … }` variant, and the
+  /// approval-mode inverse belongs next to its forward direction.
+  applyThreadSettings: (threadId: string, settings: unknown) => void;
 }
 
 function handleNotification(
@@ -1895,6 +2016,25 @@ function handleNotification(
   // notification is the single source of truth for both.
   if (method === "thread/queue/changed") {
     effects.refetchQueue(String(p.threadId));
+    return;
+  }
+  if (
+    method === "externalAgentConfig/import/progress" ||
+    method === "externalAgentConfig/import/completed"
+  ) {
+    dispatch({
+      type: "IMPORT_PROGRESS",
+      importId: String(p.importId),
+      results: (p.itemTypeResults ?? []) as ImportTypeResult[],
+      done: method === "externalAgentConfig/import/completed",
+    });
+    return;
+  }
+  if (method === "thread/settings/updated") {
+    // Fires for CLI-side changes on a shared `$CODEX_HOME` (ADR-0008) and for
+    // this client's own writes; either way the payload is the authority on
+    // what is actually in force.
+    effects.applyThreadSettings(String(p.threadId), p.threadSettings);
     return;
   }
   if (method === "thread/goal/updated") {

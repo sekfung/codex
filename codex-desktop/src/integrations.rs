@@ -482,11 +482,11 @@ pub async fn import_external_agent_config(
     bridge: State<'_, AppServerBridge>,
     migration_source: String,
     migration_items: Vec<JsonValue>,
-) -> CmdResult<JsonValue> {
+) -> CmdResult<String> {
     let migration_items = serde_json::from_value(JsonValue::Array(migration_items))
         .map_err(|err| format!("invalid migration items: {err}"))?;
 
-    bridge
+    let response = bridge
         .request(ClientRequest::ExternalAgentConfigImport {
             request_id: bridge.next_request_id(),
             params: codex_app_server_protocol::ExternalAgentConfigImportParams {
@@ -496,5 +496,14 @@ pub async fn import_external_agent_config(
                 migration_source: Some(migration_source),
             },
         })
-        .await
+        .await?;
+
+    // The response carries *only* an id: per-item outcomes arrive later on
+    // `externalAgentConfig/import/completed`. Returning the id is what lets the
+    // screen correlate those, instead of leaving the user on "已开始导入"
+    // forever with no idea whether their config actually imported.
+    let response: codex_app_server_protocol::ExternalAgentConfigImportResponse =
+        serde_json::from_value(response)
+            .map_err(|err| format!("externalAgentConfig/import: {err}"))?;
+    Ok(response.import_id)
 }

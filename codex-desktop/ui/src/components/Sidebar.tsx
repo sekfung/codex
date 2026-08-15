@@ -45,19 +45,35 @@ export function Sidebar() {
   const { mode, setMode } = useTheme();
   const [manualPath, setManualPath] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
+  /// Inline rather than a notice: the user is looking at these controls when
+  /// it fails, and a rejected path (not a directory, no permission) is about
+  /// the input right here. Silently doing nothing was the previous behavior.
+  const [addError, setAddError] = useState<string | null>(null);
 
   const searching = searchOpen || state.search.term.length > 0;
 
   async function handlePickFolder() {
-    const path = await api.pickProjectFolder();
-    if (path) await addProject(path);
+    setAddError(null);
+    try {
+      const path = await api.pickProjectFolder();
+      if (path) await addProject(path);
+    } catch (err) {
+      setAddError(String(err));
+    }
   }
 
   async function handleAddManualPath() {
     const path = manualPath.trim();
     if (!path) return;
-    await addProject(path);
-    setManualPath("");
+    setAddError(null);
+    try {
+      await addProject(path);
+      setManualPath("");
+    } catch (err) {
+      // The path stays in the box so the user can correct it rather than
+      // retype it.
+      setAddError(String(err));
+    }
   }
 
   function closeSearch() {
@@ -148,6 +164,9 @@ export function Sidebar() {
                   添加
                 </Button>
               </div>
+              {addError && (
+                <p className="px-1 text-xs break-words text-destructive">{addError}</p>
+              )}
             </div>
           </div>
         </>

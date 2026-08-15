@@ -1,11 +1,14 @@
+import { useEffect, useState } from "react";
 import { MessagesSquare } from "lucide-react";
 
+import * as api from "./api";
 import { StoreProvider, useStore } from "./store";
 import { ThemeProvider } from "./useTheme";
 import { Sidebar } from "./components/Sidebar";
 import { ChatStream } from "./components/ChatStream";
 import { Composer } from "./components/Composer";
 import { NoticeBar } from "./components/NoticeBar";
+import { StartupFailure } from "./components/StartupFailure";
 import { UsageNotice } from "./components/UsageNotice";
 import { SettingsShell } from "./components/settings/SettingsShell";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -57,7 +60,33 @@ function AppShell() {
   );
 }
 
+/// `null` while checking, `""` for ready, otherwise the failure reason.
+type StartupState = null | "" | string;
+
 function App() {
+  const [startup, setStartup] = useState<StartupState>(null);
+
+  useEffect(() => {
+    api
+      .startupFailure()
+      .then((reason) => setStartup(reason ?? ""))
+      // This check must never itself be why the app won't open: if asking
+      // fails, assume ready and let the normal paths report their own errors.
+      .catch(() => setStartup(""));
+  }, []);
+
+  // Nothing until the answer arrives — mounting the store first would fire a
+  // burst of RPCs that are all doomed when the engine is down.
+  if (startup === null) return null;
+
+  if (startup !== "") {
+    return (
+      <ThemeProvider>
+        <StartupFailure reason={startup} />
+      </ThemeProvider>
+    );
+  }
+
   return (
     <ThemeProvider>
       <StoreProvider>

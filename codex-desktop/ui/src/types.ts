@@ -1039,3 +1039,31 @@ export interface MemorySettings {
   /// `thread/memoryMode/set` exists.
   generateMemories: boolean;
 }
+
+/// Composer indicators derived from a `thread/settings/updated` payload.
+///
+/// Mapped in Rust (`commands.rs::thread_settings_indicators`): `AskForApproval`
+/// has a `Granular { … }` variant, and the approval-mode inverse belongs beside
+/// its forward direction in `approval_mode.rs`. `approvalMode` is null when the
+/// thread's settings aren't one of the three presets.
+export interface ThreadSettingsIndicators {
+  approvalMode: ApprovalMode | null;
+  model: string;
+  effort: ReasoningEffort | null;
+}
+
+/// Per-item outcome of an external-agent config import
+/// (`externalAgentConfig/import/progress` and `/completed`).
+///
+/// The import request returns only an `importId`; these results arrive later,
+/// so without them the screen can only ever say "started".
+export interface ImportTypeResult {
+  itemType: string;
+  successes: unknown[];
+  failures: { itemType: string; errorType?: string | null }[];
+}
+
+export interface ImportProgress {
+  results: ImportTypeResult[];
+  done: boolean;
+}

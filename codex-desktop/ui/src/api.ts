@@ -40,6 +40,7 @@ import type {
   ThreadListResponse,
   ThreadResumeResponse,
   ThreadSearchResponse,
+  ThreadSettingsIndicators,
   TokenBudgetEdit,
   TurnSubmission,
   ElicitationAnswer,
@@ -60,6 +61,13 @@ export function onAppServerEvent(
 ): Promise<() => void> {
   return listen<AppServerEventEnvelope>(APP_SERVER_EVENT, (event) => handler(event.payload));
 }
+
+// -- Startup -----------------------------------------------------------------
+
+/// `null` when the embedded app-server is running, the failure reason
+/// otherwise. Managed unconditionally in `main.rs`, so this is answerable even
+/// when nothing else is.
+export const startupFailure = () => invoke<string | null>("startup_failure");
 
 // -- Projects (ADR-0012) -----------------------------------------------------
 
@@ -119,6 +127,11 @@ export const forkThread = (threadId: string, lastTurnId?: string | null) =>
 // names the mode.
 export const setApprovalMode = (threadId: string, approvalMode: ApprovalMode) =>
   invoke<unknown>("set_approval_mode", { threadId, approvalMode });
+
+/// Maps a `thread/settings/updated` payload onto the composer's indicators.
+/// Mapped in Rust for the same reason the forward direction is.
+export const threadSettingsIndicators = (settings: unknown) =>
+  invoke<ThreadSettingsIndicators>("thread_settings_indicators", { settings });
 
 // Model picker, following the same two-layer shape: applied to the active
 // thread here, and carried onto new threads by `startThread`.
@@ -265,8 +278,10 @@ export const detectExternalAgentConfig = (cwds: string[]) =>
 
 /// `migrationItems` must be the server's own detected objects, echoed back
 /// unchanged, with the same `migrationSource` detection used.
+/// Returns the `importId`. Per-item outcomes arrive separately on
+/// `externalAgentConfig/import/progress` and `/completed`, correlated by it.
 export const importExternalAgentConfig = (migrationSource: string, migrationItems: unknown[]) =>
-  invoke<unknown>("import_external_agent_config", { migrationSource, migrationItems });
+  invoke<string>("import_external_agent_config", { migrationSource, migrationItems });
 
 export const listSkills = (cwds: string[] = [], forceReload = false) =>
   invoke<SkillsListResponse>("list_skills", { cwds, forceReload });

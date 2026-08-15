@@ -54,17 +54,22 @@ const TOKIO_WORKER_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
 
 /// Starts the in-process app-server and performs one round-trip request to
 /// prove the wiring is correct. Returns the client so callers can keep using
-/// it; on any setup failure, logs and returns `None` rather than crashing the
-/// whole desktop shell (the window should still open even if this fails, so
-/// the user gets a visible error state instead of a silent process exit).
-async fn start_app_server_client() -> Option<InProcessAppServerClient> {
+/// it; on any setup failure, returns the reason rather than crashing the whole
+/// desktop shell — the window still opens, and shows that reason.
+///
+/// The failure reason is returned rather than only logged: `tracing` goes to
+/// stderr, which nobody reading a GUI ever sees. Without it the window opens,
+/// renders normally, and every action fails with Tauri's opaque unmanaged-state
+/// error — an app that looks fine and does nothing. `StartupStatus` carries
+/// this to the frontend so the failure is stated once, plainly.
+async fn start_app_server_client() -> Result<InProcessAppServerClient, String> {
     // Real default `$CODEX_HOME` resolution (ADR-0008) — same code path the
     // CLI uses, honors the `CODEX_HOME` env var, no hardcoded temp dir.
     let config = match Config::load_default_with_cli_overrides(Vec::new()).await {
         Ok(config) => config,
         Err(err) => {
             tracing::error!(%err, "failed to load default Codex config");
-            return None;
+            return Err(format!("无法读取 Codex 配置：{err}"));
         }
     };
     let config = Arc::new(config);
@@ -87,7 +92,7 @@ async fn start_app_server_client() -> Option<InProcessAppServerClient> {
         Ok(paths) => paths,
         Err(err) => {
             tracing::error!(%err, "failed to resolve exec-server runtime paths");
-            return None;
+            return Err(format!("无法定位 exec-server 运行时：{err}"));
         }
     };
 
@@ -101,7 +106,7 @@ async fn start_app_server_client() -> Option<InProcessAppServerClient> {
         Ok(manager) => manager,
         Err(err) => {
             tracing::error!(%err, "failed to build environment manager");
-            return None;
+            return Err(format!("无法初始化运行环境：{err}"));
         }
     };
 
@@ -143,7 +148,7 @@ async fn start_app_server_client() -> Option<InProcessAppServerClient> {
         Ok(client) => client,
         Err(err) => {
             tracing::error!(%err, "failed to start in-process app-server");
-            return None;
+            return Err(format!("Codex 引擎启动失败：{err}"));
         }
     };
 
@@ -172,7 +177,53 @@ async fn start_app_server_client() -> Option<InProcessAppServerClient> {
         }
     }
 
-    Some(client)
+    Ok(client)
+}
+
+/// Whether the embedded app-server came up, and why not if it didn't.
+///
+/// Managed unconditionally so the frontend can ask. Every RPC-backed command
+/// takes `State<'_, AppServerBridge>`, which is only managed on success — so
+/// without this the frontend's only signal is Tauri's unmanaged-state error on
+/// whatever the user happened to click first.
+pub enum StartupStatus {
+    Ready,
+    Failed(String),
+}
+
+impl StartupStatus {
+    /// `None` when the engine is running; the failure reason otherwise.
+    fn failure(&self) -> Option<String> {
+        match self {
+            StartupStatus::Ready => None,
+            StartupStatus::Failed(reason) => Some(reason.clone()),
+        }
+    }
+}
+
+/// `None` when the engine is running; the failure reason otherwise.
+#[tauri::command]
+async fn startup_failure(
+    status: tauri::State<'_, StartupStatus>,
+) -> Result<Option<String>, String> {
+    Ok(status.inner().failure())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StartupStatus;
+    use pretty_assertions::assert_eq;
+
+    /// The frontend blocks the whole app on this being `Some`, so inverting it
+    /// would either hide a dead engine or refuse to start a healthy one.
+    #[test]
+    fn startup_failure_is_reported_only_when_startup_failed() {
+        assert_eq!(StartupStatus::Ready.failure(), None);
+        assert_eq!(
+            StartupStatus::Failed("boom".to_string()).failure(),
+            Some("boom".to_string())
+        );
+    }
 }
 
 fn main() {
@@ -214,19 +265,23 @@ fn main() {
             // handle in every command. Config load + in-process app-server
             // startup is normally sub-second; acceptable to block on here.
             match tauri::async_runtime::block_on(start_app_server_client()) {
-                Some(client) => {
+                Ok(client) => {
                     let bridge = bridge::spawn_bridge(client, app.handle().clone());
                     app.manage(bridge);
+                    app.manage(StartupStatus::Ready);
                 }
-                None => {
+                Err(reason) => {
                     tracing::error!(
+                        %reason,
                         "app-server failed to start; Project/thread/turn commands will be unavailable this session"
                     );
+                    app.manage(StartupStatus::Failed(reason));
                 }
             }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            startup_failure,
             commands::list_projects,
             commands::add_project,
             commands::remove_project,
@@ -242,6 +297,7 @@ fn main() {
             commands::set_model,
             commands::start_thread,
             commands::set_approval_mode,
+            commands::thread_settings_indicators,
             commands::resume_thread,
             commands::fork_thread,
             composer::send_turn,

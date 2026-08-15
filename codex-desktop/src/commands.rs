@@ -22,6 +22,7 @@ use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadSearchParams;
 use codex_app_server_protocol::ThreadSearchSortKey;
 use codex_app_server_protocol::ThreadSetNameParams;
+use codex_app_server_protocol::ThreadSettings;
 use codex_app_server_protocol::ThreadSettingsUpdateParams;
 // The wire enums, not the core ones of the same name: `ThreadStartParams`
 // carries `codex_app_server_protocol`'s versions, and `codex_protocol` has
@@ -558,6 +559,50 @@ pub async fn reject_approval(
     bridge.reject_server_request(request_id, message).await
 }
 
+/// The composer indicators derived from a `thread/settings/updated` payload.
+///
+/// `approvalMode` is `None` when the thread's settings aren't one of the three
+/// presets — the same honest outcome `from_config_parts` gives for a
+/// hand-edited config, rather than snapping the indicator to a mode the user
+/// never chose.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadSettingsIndicators {
+    approval_mode: Option<ApprovalMode>,
+    model: String,
+    effort: Option<String>,
+}
+
+/// Maps a `thread/settings/updated` payload onto the composer's indicators.
+///
+/// Done in Rust so the approval-mode inverse stays in `approval_mode.rs`
+/// alongside its forward direction, and so TypeScript never parses
+/// `AskForApproval` — which has a `Granular { … }` variant that a hand-written
+/// interface would silently mishandle.
+#[tauri::command]
+pub async fn thread_settings_indicators(
+    settings: JsonValue,
+) -> CmdResult<ThreadSettingsIndicators> {
+    let settings: ThreadSettings = serde_json::from_value(settings)
+        .map_err(|err| format!("thread/settings/updated payload: {err}"))?;
+    Ok(indicators_from_settings(settings))
+}
+
+fn indicators_from_settings(settings: ThreadSettings) -> ThreadSettingsIndicators {
+    ThreadSettingsIndicators {
+        approval_mode: ApprovalMode::from_config_parts(
+            Some(&settings.approval_policy),
+            Some(settings.approvals_reviewer),
+            settings
+                .active_permission_profile
+                .as_ref()
+                .map(|profile| profile.id.as_str()),
+        ),
+        model: settings.model,
+        effort: settings.effort.map(|effort| effort.to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -621,5 +666,70 @@ mod tests {
         // `permissions` and `sandbox` are mutually exclusive on the wire; the
         // server rejects a request carrying both.
         assert_eq!(params.sandbox, None);
+    }
+
+    /// The payload is deserialized from the wire shape rather than a
+    /// hand-built struct, so a serde rename on `ThreadSettings` breaks this
+    /// test rather than silently producing a wrong indicator at runtime.
+    fn settings_json(profile_id: &str, reviewer: &str, policy: &str) -> serde_json::Value {
+        serde_json::json!({
+            "cwd": "/repo",
+            "approvalPolicy": policy,
+            "approvalsReviewer": reviewer,
+            // camelCase variants: this is the v2 `SandboxPolicy`, not
+            // `codex_protocol`'s kebab-case type of the same name — the same
+            // duplicate-name hazard the imports at the top of this file warn
+            // about for `ThreadHistoryMode`/`ThreadSource`.
+            "sandboxPolicy": { "type": "dangerFullAccess" },
+            "activePermissionProfile": { "id": profile_id },
+            "model": "gpt-x",
+            "modelProvider": "openai",
+            "serviceTier": null,
+            "effort": "medium",
+            "summary": null,
+            // `Settings` carries no `rename_all`, so its fields stay
+            // snake_case among camelCase siblings — the same trap this
+            // protocol has sprung repeatedly, and the reason this payload is
+            // deserialized here rather than described by a TS interface.
+            "collaborationMode": {
+                "mode": "default",
+                "settings": {
+                    "model": "gpt-x",
+                    "reasoning_effort": null,
+                    "developer_instructions": null,
+                },
+            },
+            "personality": null,
+        })
+    }
+
+    #[test]
+    fn thread_settings_map_onto_the_composer_indicators() {
+        let resolved = ApprovalMode::FullAccess.resolve().expect("resolves");
+        let policy = serde_json::to_value(resolved.approval_policy).expect("policy serializes");
+        let reviewer =
+            serde_json::to_value(resolved.approvals_reviewer).expect("reviewer serializes");
+        let json = settings_json(
+            &resolved.permission_profile_id,
+            reviewer.as_str().expect("reviewer is a string"),
+            policy.as_str().expect("policy is a string"),
+        );
+        let settings: ThreadSettings = serde_json::from_value(json).expect("settings deserialize");
+
+        let indicators = indicators_from_settings(settings);
+
+        assert_eq!(indicators.approval_mode, Some(ApprovalMode::FullAccess));
+        assert_eq!(indicators.model, "gpt-x");
+        assert_eq!(indicators.effort.as_deref(), Some("medium"));
+    }
+
+    /// A combination the three-preset selector cannot express must report
+    /// `None` rather than being snapped to a preset the user never chose.
+    #[test]
+    fn unexpressible_thread_settings_yield_no_approval_mode() {
+        let json = settings_json(":read-only", "user", "on-request");
+        let settings: ThreadSettings = serde_json::from_value(json).expect("settings deserialize");
+
+        assert_eq!(indicators_from_settings(settings).approval_mode, None);
     }
 }
