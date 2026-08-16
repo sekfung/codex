@@ -22,11 +22,19 @@ const TARGETS: Array<{ kind: TargetKind; label: string; hint: string }> = [
   { kind: "uncommittedChanges", label: "未提交的改动", hint: "暂存、未暂存和未跟踪的文件" },
   { kind: "baseBranch", label: "与基线分支对比", hint: "当前分支相对某个分支的改动" },
   { kind: "commit", label: "某个提交", hint: "单个提交引入的改动" },
+  { kind: "revision", label: "某个修订", hint: "单个 SVN 修订引入的改动" },
   { kind: "custom", label: "自定义要求", hint: "自由描述要审查什么" },
 ];
 
-/** The two targets that only mean something inside a git work tree. */
-const GIT_TARGETS = new Set<TargetKind>(["baseBranch", "commit"]);
+/** Targets that only mean something in a git work tree. */
+const GIT_ONLY_TARGETS = new Set<TargetKind>(["commit"]);
+/** Targets that only mean something in a Subversion working copy. */
+const SVN_ONLY_TARGETS = new Set<TargetKind>(["revision"]);
+/**
+ * `baseBranch` is offered in both: the engine renders it per system, with
+ * `git diff` for one and `svn diff` for the other. See `review_request.rs`.
+ */
+const VCS_TARGETS = new Set<TargetKind>(["baseBranch", "commit", "revision"]);
 
 /**
  * `ReviewDelivery`. The Official App surfaces this in its Git settings as
@@ -84,6 +92,7 @@ export function ReviewLauncher({ threadId }: { threadId: string }) {
   const [kind, setKind] = useState<TargetKind>("uncommittedChanges");
   const [branch, setBranch] = useState("");
   const [sha, setSha] = useState("");
+  const [revision, setRevision] = useState("");
   const [instructions, setInstructions] = useState("");
   const [delivery, setDelivery] = useState<ReviewDelivery>("inline");
   const [busy, setBusy] = useState(false);
@@ -115,10 +124,17 @@ export function ReviewLauncher({ threadId }: { threadId: string }) {
     if (next) void loadRefs();
   }
 
-  // Hidden rather than disabled when the directory is not a repository: an
-  // inert "与基线分支对比" row invites the user to wonder what is wrong, and
-  // `isGitRepo: false` is a definite answer, not a loading state.
-  const targets = refs && !refs.isGitRepo ? TARGETS.filter((t) => !GIT_TARGETS.has(t.kind)) : TARGETS;
+  // Hidden rather than disabled: an inert row invites the user to wonder what
+  // is wrong, and the reported system is a definite answer, not a loading
+  // state. Before the refs load, everything version-control-specific stays
+  // hidden rather than flashing options that may not apply.
+  const targets = TARGETS.filter((option) => {
+    if (!VCS_TARGETS.has(option.kind)) return true;
+    if (!refs) return false;
+    if (refs.vcs === "git") return !SVN_ONLY_TARGETS.has(option.kind);
+    if (refs.vcs === "subversion") return !GIT_ONLY_TARGETS.has(option.kind);
+    return false;
+  });
 
   /**
    * Returns null when the chosen variant still needs input, which is what
@@ -133,6 +149,10 @@ export function ReviewLauncher({ threadId }: { threadId: string }) {
         return branch.trim() ? { kind: "baseBranch", branch: branch.trim() } : null;
       case "commit":
         return sha.trim() ? { kind: "commit", sha: sha.trim(), title: null } : null;
+      case "revision":
+        return revision.trim()
+          ? { kind: "revision", revision: revision.trim(), title: null }
+          : null;
       case "custom":
         return instructions.trim() ? { kind: "custom", instructions: instructions.trim() } : null;
     }
@@ -231,6 +251,19 @@ export function ReviewLauncher({ threadId }: { threadId: string }) {
                 </button>
               ))}
             </div>
+          </div>
+        )}
+        {kind === "revision" && (
+          <div className="mb-3">
+            <input
+              value={revision}
+              onChange={(event) => setRevision(event.target.value)}
+              placeholder="修订号，例如 12345"
+              className="h-8 w-full rounded-md border border-input bg-background px-2 font-mono text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+            {/* No candidate list: listing revisions means `svn log`, which
+                contacts the repository server. Too slow to run on opening a
+                popover, and the number is usually already at hand. */}
           </div>
         )}
         {kind === "custom" && (

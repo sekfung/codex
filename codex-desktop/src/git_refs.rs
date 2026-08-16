@@ -47,10 +47,25 @@ pub struct GitCommitOption {
     pub subject: String,
 }
 
+/// Which version control system the picker should offer targets for.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum PickerVcs {
+    Git,
+    Subversion,
+    /// Neither — the review picker offers only the working-tree and free-form
+    /// targets, which mean something anywhere.
+    None,
+}
+
 /// Candidates for the review target picker.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GitRefs {
+    /// Which system's targets to offer. `Subversion` gets the revision target
+    /// instead of branch and commit, because `ReviewTarget::Revision` is what
+    /// the engine can actually run there.
+    pub vcs: PickerVcs,
     /// False when `cwd` is not a git work tree. The UI hides the branch and
     /// commit targets entirely rather than offering empty pickers, matching
     /// how `GitDiffResult::is_git_repo` is treated.
@@ -73,6 +88,15 @@ pub async fn git_refs(cwd: String) -> Result<GitRefs, String> {
     // engine considers the directory a repository.
     if codex_git_utils::get_git_repo_root(&cwd).is_none() {
         return Ok(GitRefs {
+            // Reported even though no candidates come with it: the engine's
+            // revision target takes a number the user types, so the UI needs to
+            // know to offer it. Listing revisions would mean `svn log`, which
+            // contacts the server — too expensive for opening a popover.
+            vcs: if codex_vcs_utils::is_svn_working_copy(&cwd) {
+                PickerVcs::Subversion
+            } else {
+                PickerVcs::None
+            },
             is_git_repo: false,
             branches: Vec::new(),
             current_branch: None,
@@ -87,6 +111,7 @@ pub async fn git_refs(cwd: String) -> Result<GitRefs, String> {
     );
 
     Ok(GitRefs {
+        vcs: PickerVcs::Git,
         is_git_repo: true,
         branches,
         current_branch: current,

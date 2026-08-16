@@ -40,6 +40,26 @@ impl InfoItem {
     }
 }
 
+/// Whether `path` sits inside a Subversion working copy.
+///
+/// A synchronous marker walk, for callers that are not async and only need to
+/// choose between two behaviours. It answers the same question as
+/// `resolve_svn_working_copy_root` without the filesystem abstraction or the
+/// root path, and uses the same rule: the nearest ancestor carrying a `.svn`
+/// directory (Subversion 1.7+ keeps exactly one, at the working-copy root).
+pub fn is_svn_working_copy(path: &Path) -> bool {
+    let mut dir = path;
+    loop {
+        if dir.join(".svn").is_dir() {
+            return true;
+        }
+        match dir.parent() {
+            Some(parent) => dir = parent,
+            None => return false,
+        }
+    }
+}
+
 /// Metadata identifying what a Subversion working copy currently has checked
 /// out.
 #[derive(Debug, Clone, PartialEq, Eq)]

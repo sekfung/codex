@@ -404,7 +404,11 @@ export interface GitCommitOption {
  * `isGitRepo: false` means "not a repository" — the branch and commit targets
  * are hidden entirely rather than offered empty.
  */
+/** Which system's review targets the picker should offer. */
+export type PickerVcs = "git" | "subversion" | "none";
+
 export interface GitRefs {
+  vcs: PickerVcs;
   isGitRepo: boolean;
   branches: string[];
   currentBranch?: string | null;
@@ -1170,6 +1174,8 @@ export type ReviewTargetInput =
   | { kind: "uncommittedChanges" }
   | { kind: "baseBranch"; branch: string }
   | { kind: "commit"; sha: string; title?: string | null }
+  /** Subversion's counterpart to `commit` — a revision number, not a hash. */
+  | { kind: "revision"; revision: string; title?: string | null }
   | { kind: "custom"; instructions: string };
 
 // -- Queue (`thread/queue/*`) ------------------------------------------------

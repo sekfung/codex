@@ -3206,6 +3206,23 @@ pub enum ReviewTarget {
         title: Option<String>,
     },
 
+    /// Review the changes introduced by a specific Subversion revision.
+    ///
+    /// Separate from [`ReviewTarget::Commit`] rather than reusing its `sha`
+    /// field: a revision is a number, not a hash, and a client that had to put
+    /// one into a field named `sha` would be lying about its contents — leaving
+    /// every consumer to guess which it received. Where the concept genuinely
+    /// transfers between systems, as with [`ReviewTarget::BaseBranch`], the
+    /// variant is shared and only the rendered prompt differs.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Revision {
+        /// A revision as `svn` accepts it — a number, or `123:456` for a range.
+        revision: String,
+        /// Optional human-readable label (e.g., commit message) for UIs.
+        title: Option<String>,
+    },
+
     /// Arbitrary instructions provided by the user.
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]

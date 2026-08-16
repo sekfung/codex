@@ -2,11 +2,9 @@
 
 Reported upward per ADR-0021: a desired capability with no basis is a protocol gap, not a gap for `codex-desktop/` to fill locally.
 
-> **Status.** Sites 4 and 1 are now closed engine-side — `is_safe_svn_command` in
-> `shell-command`, and `core/src/project_root.rs` resolving the project root for git or
-> Subversion. Sites 2 and 3 remain open, and both are format decisions rather than
-> missing code. The per-site sections below are kept as written, with a closing note
-> on each of the two.
+> **Status. All four sites are closed.** The per-site sections below are kept as
+> originally written, each with a closing note on how it was resolved and on anything
+> the original reading got wrong.
 
 `grep -rin "svn\|Subversion"` across `codex-rs/`, `codex-desktop/` and `docs/` returns **nothing**. There is no VCS abstraction to implement against — git is not one supported backend among several, it is assumed by name at four load-bearing points. Each is listed below with what an SVN-capable engine would have to do about it.
 
@@ -26,6 +24,8 @@ Outside a git repository this returns `None`, so an SVN working copy silently fa
 
 **What SVN needs:** the stored shape is the problem, not the probe. `commit_hash` + `branch` has no faithful SVN equivalent — SVN has a monotonic revision number and a *path* convention (`trunk`/`branches/x`), not a branch ref. Either the field becomes a tagged union over VCS kinds, or `branch` is redefined loosely enough to hold a path and `commit_hash` to hold a revision. That is a persisted-format decision affecting existing rollout files, so it wants deciding early.
 
+**Closed.** `GitInfo` gained a `vcs` discriminator, and the three value fields are reused rather than duplicated per system — a reader consults one field and interprets it by `vcs`. The migration cost nothing, for one specific reason: `VcsKind` defaults to git on read, and every record written before this came from a git-only build, so an absent discriminator is a true statement about existing data rather than a fallback for unknown data. Git records stay byte-identical because the field is skipped when it is git. The state database needed a `git_vcs` column (migration `0049`) too: without it the discriminator was lost on the round trip through `ThreadMetadataPatch`, and a Subversion thread read back as git.
+
 ## 3. `ReviewTarget` is branch/sha-shaped
 
 `app-server-protocol/src/protocol/v2/review.rs:43-65` defines the review target as `UncommittedChanges | BaseBranch { branch } | Commit { sha } | Custom { instructions }`.
@@ -33,6 +33,10 @@ Outside a git repository this returns `None`, so an SVN working copy silently fa
 `BaseBranch` and `Commit` are git vocabulary in the wire protocol itself, not just in an implementation. `UncommittedChanges` and `Custom` are already VCS-neutral and would work as-is against SVN.
 
 **What SVN needs:** either two more variants (`Revision { number }`, `BranchPath { path }`) or a generalisation of the existing two. Note this is a v2 protocol type consumed by the TUI, `codex exec review`, and Codex Desktop alike — changing it is not additive for this fork (ADR-0001).
+
+**Closed, and one of the two variants turned out to be unnecessary.** Only `Revision { revision, title }` was added. A revision is a number rather than a hash, so putting one in a field named `sha` would leave every consumer guessing what it received — that earns its own variant. `BaseBranch` did not: comparing against a base means the same thing in both systems and only the commands differ, so the variant is shared and `review_prompt` renders `svn diff` in place of `git diff` when the directory is a working copy.
+
+**A correction to the paragraph above.** It implied `BaseBranch` merely lacked Subversion support. It was worse than that: `merge_base_with_head` returns an *error* rather than `None` outside a git repository, and `review_prompt` propagates it with `?`, so a base-branch review in a Subversion working copy failed outright instead of degrading. The git wording is reached only when the directory *is* a git repository whose branch cannot be resolved.
 
 ## 4. Command-safety classifier — the one that will be felt first
 
@@ -55,11 +59,15 @@ Its only non-test caller is `memories/write/src/workspace.rs:13-19,26-28,44-45`,
 
 1. ~~**Command-safety classifier**~~ — done. Additive, no protocol change, removed the most visible daily friction.
 2. ~~**Project-root resolution**~~ — done. Unblocked trust grouping and workspace context together.
-3. **Thread metadata shape** — decide the persisted format before more rollout files accumulate under the git-only assumption. Open.
-4. **`ReviewTarget`** — last, because it is a wire-protocol change with three consumers, and because `UncommittedChanges` already covers the common case in the meantime. Open.
+3. ~~**Thread metadata shape**~~ — done. `vcs` discriminator plus state-database column, no backfill.
+4. ~~**`ReviewTarget`**~~ — done. One new variant, and a shared one whose prompt now adapts.
 
-What remains is not missing code. Both open items are decisions about a shape — one persisted, one on the wire — and both are cheaper to make before more data and more consumers accumulate under the current one.
+All four are closed. What Subversion still lacks relative to git is candidate *listing*: the review picker offers a revision field to type into rather than a list to choose from, because listing revisions means `svn log`, which contacts the repository server — too slow to run on opening a popover. That is a UI affordance, not a protocol gap.
 
 ## What Codex Desktop does today
 
-Nothing here is worked around locally. `git_refs`, `git_diff`, `git_diff_to_remote` and `branch_status` each report "not a git repository" as a distinct, honest state rather than an error or an empty result, and the review picker hides its `baseBranch` and `commit` targets outside a git work tree. In an SVN working copy the git-specific surfaces are therefore absent rather than broken — which is the correct behaviour until the engine has something else to render.
+Nothing here is worked around locally, which is what made closing the gaps engine-side the only honest route.
+
+`git_refs` now reports which system it found rather than only whether it found git, and the review picker follows: branch and commit targets in a git work tree, the revision target in a Subversion working copy, and the base-branch target in both. `git_diff`, `git_diff_to_remote` and `branch_status` remain git-specific and report "not a git repository" as a distinct, honest state rather than an error or an empty result — so in a Subversion working copy those surfaces are absent rather than broken.
+
+Their Subversion counterparts are the natural next increment, and unlike everything above they need no engine work: `svn diff` and `svn status` are now auto-approved reads.

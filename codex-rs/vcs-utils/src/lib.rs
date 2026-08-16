@@ -23,6 +23,7 @@ use codex_utils_path_uri::PathUri;
 
 pub use svn::SvnInfo;
 pub use svn::collect_svn_info;
+pub use svn::is_svn_working_copy;
 
 /// Which version control system claimed a directory.
 ///

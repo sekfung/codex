@@ -677,9 +677,22 @@ pub async fn compact_thread(
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ReviewTargetInput {
     UncommittedChanges,
-    BaseBranch { branch: String },
-    Commit { sha: String, title: Option<String> },
-    Custom { instructions: String },
+    BaseBranch {
+        branch: String,
+    },
+    Commit {
+        sha: String,
+        title: Option<String>,
+    },
+    /// Subversion's counterpart to `Commit`. A separate variant rather than a
+    /// revision squeezed into `sha`, matching the protocol.
+    Revision {
+        revision: String,
+        title: Option<String>,
+    },
+    Custom {
+        instructions: String,
+    },
 }
 
 impl From<ReviewTargetInput> for ReviewTarget {
@@ -688,6 +701,9 @@ impl From<ReviewTargetInput> for ReviewTarget {
             ReviewTargetInput::UncommittedChanges => ReviewTarget::UncommittedChanges,
             ReviewTargetInput::BaseBranch { branch } => ReviewTarget::BaseBranch { branch },
             ReviewTargetInput::Commit { sha, title } => ReviewTarget::Commit { sha, title },
+            ReviewTargetInput::Revision { revision, title } => {
+                ReviewTarget::Revision { revision, title }
+            }
             ReviewTargetInput::Custom { instructions } => ReviewTarget::Custom { instructions },
         }
     }
