@@ -186,15 +186,6 @@ export const DEFAULT_PALETTE: Record<PaletteMode, Record<ThemeTokenKey, string>>
 
 export type TokenOverrides = Partial<Record<ThemeTokenKey, string>>;
 
-export function effectivePalette(mode: PaletteMode, overrides: TokenOverrides): Record<ThemeTokenKey, string> {
-  const palette = { ...DEFAULT_PALETTE[mode] };
-  for (const key of THEME_TOKEN_KEYS) {
-    const value = overrides[key];
-    if (value) palette[key] = value;
-  }
-  return palette;
-}
-
 export function isHexColor(value: string): boolean {
   return /^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(value);
 }

@@ -21,6 +21,10 @@ interface ColorControlProps {
 export function ColorControl({ label, value, defaultValue, overridden, onCommit }: ColorControlProps) {
   const [draft, setDraft] = useState(value);
 
+  // Preset bases are hex; the single alpha token is oklch, which
+  // react-colorful's HexColorPicker cannot parse — fall back to black.
+  const pickerColor = isHexColor(value) ? value : "#000000";
+
   useEffect(() => {
     setDraft(value);
   }, [value]);
@@ -71,7 +75,7 @@ export function ColorControl({ label, value, defaultValue, overridden, onCommit 
           </button>
         </PopoverTrigger>
         <PopoverContent className="w-60">
-          <HexColorPicker color={value} onChange={(hex) => onCommit(hex)} />
+          <HexColorPicker color={pickerColor} onChange={(hex) => onCommit(hex)} />
           <input
             value={draft}
             onChange={(event) => setDraft(event.target.value)}

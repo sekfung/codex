@@ -11,11 +11,11 @@ import type { ReactNode } from "react";
 
 import { THEME_TOKEN_KEYS, emptyCustomization, fontFamily, isHexColor, normalizeCustomization } from "./themeTokens";
 import type { FontKey, PaletteMode, ThemeCustomization, ThemeTokenKey } from "./themeTokens";
+import { effectivePalette } from "./themePresets";
 
 // Basic light/dark/system theming plus per-mode token overrides and a font
-// choice (ADR-0009). Overrides are applied as inline CSS custom properties on
-// <html>; the base values live in `index.css`'s `:root`/`.dark` blocks, so
-// removing an inline override falls back to the default automatically.
+// choice (ADR-0009). The resolved palette — preset base values plus any
+// overrides — is applied inline as CSS custom properties on <html>.
 //
 // Theme mode and customization are desktop chrome, so both stay in
 // `localStorage` rather than `config.toml` (ADR-0020) — the CLI has no use
@@ -38,11 +38,9 @@ function applyTheme(resolved: PaletteMode, customization: ThemeCustomization) {
   // Kept in sync so native form controls, scrollbars and the webview's own
   // canvas follow the theme too — CSS `color-scheme` reads this.
   document.documentElement.style.colorScheme = resolved;
-  const overrides = customization[resolved].tokens;
+  const palette = effectivePalette(resolved, customization);
   for (const key of THEME_TOKEN_KEYS) {
-    const hex = overrides[key];
-    if (hex) document.documentElement.style.setProperty(`--${key}`, hex);
-    else document.documentElement.style.removeProperty(`--${key}`);
+    document.documentElement.style.setProperty(`--${key}`, palette[key]);
   }
   document.documentElement.style.setProperty("--font-sans", fontFamily(customization.font));
 }

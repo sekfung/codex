@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { Check } from "lucide-react";
 
-import { DEFAULT_PALETTE, TOKEN_GROUPS, effectivePalette } from "../../themeTokens";
+import { TOKEN_GROUPS } from "../../themeTokens";
 import type { PaletteMode, ThemeCustomization, ThemeTokenKey } from "../../themeTokens";
+import { basePalette, effectivePalette } from "../../themePresets";
 import { ColorControl } from "./ColorControl";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -20,7 +21,7 @@ interface ThemeTokenEditorProps {
 
 export function ThemeTokenEditor({ customization, setToken, resetModeTokens }: ThemeTokenEditorProps) {
   const [mode, setMode] = useState<PaletteMode>("light");
-  const palette = effectivePalette(mode, customization[mode].tokens);
+  const palette = effectivePalette(mode, customization);
 
   return (
     <div className="divide-y divide-border">
@@ -59,7 +60,7 @@ export function ThemeTokenEditor({ customization, setToken, resetModeTokens }: T
               key={key}
               label={label}
               value={palette[key]}
-              defaultValue={DEFAULT_PALETTE[mode][key]}
+              defaultValue={basePalette(mode, customization.theme)[key]}
               overridden={customization[mode].tokens[key] !== undefined}
               onCommit={(hex) => setToken(mode, key, hex)}
             />

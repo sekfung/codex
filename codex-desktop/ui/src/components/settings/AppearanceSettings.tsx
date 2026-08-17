@@ -2,8 +2,9 @@ import { Check } from "lucide-react";
 
 import { useTheme } from "../../useTheme";
 import type { ThemeMode } from "../../useTheme";
-import { FONTS, effectivePalette } from "../../themeTokens";
+import { FONTS } from "../../themeTokens";
 import type { PaletteMode, ThemeTokenKey } from "../../themeTokens";
+import { effectivePalette } from "../../themePresets";
 import { SettingsHeader, SettingsSection, SettingRow } from "./SettingsPrimitives";
 import { ThemeTokenEditor } from "./ThemeTokenEditor";
 import { Select } from "@/components/ui/select";
@@ -25,8 +26,8 @@ const THEMES: { mode: ThemeMode; label: string }[] = [
 export function AppearanceSettings() {
   const { mode, setMode, customization, setToken, resetModeTokens, setFont } = useTheme();
   const palette: Record<PaletteMode, Record<ThemeTokenKey, string>> = {
-    light: effectivePalette("light", customization.light.tokens),
-    dark: effectivePalette("dark", customization.dark.tokens),
+    light: effectivePalette("light", customization),
+    dark: effectivePalette("dark", customization),
   };
 
   return (
