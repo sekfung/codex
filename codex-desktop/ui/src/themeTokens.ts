@@ -199,6 +199,7 @@ export const FONTS: FontOption[] = [
   {
     key: "system",
     label: "系统默认",
+    // Keep in sync with index.css --font-sans.
     family:
       'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif',
   },

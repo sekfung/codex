@@ -119,9 +119,15 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+}
 
-  /* The Official App ships a proprietary "Codex" face (ADR-0019); a neutral
-     system stack stands in. */
+@theme {
+  /* ADR-0019: The Official App ships a proprietary "Codex" face; a neutral
+     system stack stands in. Kept out of the `@theme inline` block above:
+     inline values get substituted literally into the generated utilities, so
+     no live --font-sans custom property would exist for useTheme to override.
+     As a plain `@theme` block the variable is emitted and utilities reference
+     var(--font-sans), letting the runtime font choice take effect (ADR-0009). */
   --font-sans:
     ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
     "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
@@ -208,20 +214,21 @@
       animation: none;
     }
   }
+}
 
-  /* react-colorful picker inside the Appearance popover: fill the popover
-     and match the app's radius so it doesn't read as a foreign widget.
-     The library injects its own <style> at mount, so these overrides need
-     the extra .popover-surface specificity to win the cascade. */
-  .popover-surface .react-colorful {
-    width: 100%;
-  }
+/* react-colorful injects its own <style> at mount as unlayered author CSS.
+   Cascade layers are compared before specificity, so rules in @layer
+   components would always lose to that unlayered stylesheet. Kept unlayered,
+   these win on both layer membership and the extra .popover-surface
+   specificity. */
+.popover-surface .react-colorful {
+  width: 100%;
+}
 
-  .popover-surface .react-colorful__saturation {
-    border-radius: calc(var(--radius) - 2px);
-  }
+.popover-surface .react-colorful__saturation {
+  border-radius: calc(var(--radius) - 2px);
+}
 
-  .popover-surface .react-colorful__last-control {
-    border-radius: var(--radius);
-  }
+.popover-surface .react-colorful__last-control {
+  border-radius: var(--radius);
 }

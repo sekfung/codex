@@ -9,7 +9,7 @@ import {
 } from "react";
 import type { ReactNode } from "react";
 
-import { THEME_TOKEN_KEYS, emptyCustomization, fontFamily, normalizeCustomization } from "./themeTokens";
+import { THEME_TOKEN_KEYS, emptyCustomization, fontFamily, isHexColor, normalizeCustomization } from "./themeTokens";
 import type { FontKey, PaletteMode, ThemeCustomization, ThemeTokenKey } from "./themeTokens";
 
 // Basic light/dark/system theming plus per-mode token overrides and a font
@@ -64,9 +64,10 @@ interface ThemeValue {
 const ThemeContext = createContext<ThemeValue | null>(null);
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [mode, setMode] = useState<ThemeMode>(
-    () => (localStorage.getItem(STORAGE_KEY) as ThemeMode | null) ?? "system",
-  );
+  const [mode, setMode] = useState<ThemeMode>(() => {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    return stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
+  });
   const [systemDark, setSystemDark] = useState(systemPrefersDark);
   const [customization, setCustomization] = useState<ThemeCustomization>(() => {
     try {
@@ -91,13 +92,15 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [mode, systemDark, customization]);
 
   useEffect(() => {
-    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const media = window.matchMedia?.("(prefers-color-scheme: dark)");
+    if (!media) return;
     const onChange = () => setSystemDark(media.matches);
     media.addEventListener("change", onChange);
     return () => media.removeEventListener("change", onChange);
   }, []);
 
   const setToken = useCallback((targetMode: PaletteMode, token: ThemeTokenKey, hex: string | null) => {
+    if (hex !== null && !isHexColor(hex)) return;
     setCustomization((prev) => {
       const tokens = { ...prev[targetMode].tokens };
       if (hex === null) delete tokens[token];
