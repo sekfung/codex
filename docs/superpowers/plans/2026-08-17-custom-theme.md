@@ -8,6 +8,15 @@
 
 **Tech Stack:** React 18 + TypeScript、Tailwind CSS v4、shadcn/ui 风格组件（Radix Popover）、`react-colorful` 取色库、Vite、pnpm workspace。
 
+## Amendment（实现后补记，commit `3b32dfe`）
+
+最终整体审查发现两处本计划自身带出的缺陷，已修复，特此修正计划文本中的错误模型：
+
+1. **字体覆盖无效（Critical）**：`--font-sans` 原先写在 `@theme inline` 块内。Tailwind 会把 inline 块的字面值直接内联进工具类，且根本不发射 `--font-sans` 自定义属性——JS 的 `setProperty("--font-sans", ...)` 写入的变量无人读取。修复：字体移入独立的普通 `@theme` 块（非 inline），工具类改为引用 `var(--font-sans)`。颜色/圆角仍留在 `@theme inline`（其 inline 值本身是 `var(--primary)` 等间接引用，运行时覆盖仍然生效）。经验法则：*`@theme inline` 的字面值不可在运行时覆盖；判定可覆盖性要看编译产物而非源 CSS。*
+2. **取色器样式覆盖失效（Important）**：`.popover-surface .react-colorful*` 规则原先放在 `@layer components` 内。react-colorful 在挂载时注入无层级 `<style>`，无层级作者样式永远压过任何 `@layer` 规则（与特异性无关）——计划中"靠更高特异性取胜"的理由不成立。修复：三条规则移出 `@layer`，改为无层级。
+
+另修若干次要项：`matchMedia` 守卫对齐、`setToken` hex 校验、mode 加载校验（防非法 localStorage 值索引 `customization[resolved]` 抛错）、字体栈同步注释、文件尾换行。
+
 ## Global Constraints
 
 - 包管理用 **pnpm**（根目录 workspace，`.npmrc` 含 pnpm 专属配置；绝不用 npm/yarn）。
