@@ -116,6 +116,18 @@ export const TOKEN_GROUPS: TokenGroup[] = [
 
 export type PaletteMode = "light" | "dark";
 
+export const THEME_KEYS = [
+  "default",
+  "modern-minimal",
+  "clean-slate",
+  "amber-minimal",
+  "corporate",
+  "graphite",
+  "mono",
+] as const;
+
+export type ThemeKey = (typeof THEME_KEYS)[number];
+
 // 与 src/index.css 的 `:root` / `.dark` 块保持同步。
 export const DEFAULT_PALETTE: Record<PaletteMode, Record<ThemeTokenKey, string>> = {
   light: {
@@ -236,21 +248,24 @@ export interface ModePalette {
 }
 
 export interface ThemeCustomization {
+  theme: ThemeKey;
   font: FontKey;
   light: ModePalette;
   dark: ModePalette;
 }
 
 export function emptyCustomization(): ThemeCustomization {
-  return { font: "system", light: { tokens: {} }, dark: { tokens: {} } };
+  return { theme: "default", font: "system", light: { tokens: {} }, dark: { tokens: {} } };
 }
 
 export function normalizeCustomization(raw: unknown): ThemeCustomization {
   const empty = emptyCustomization();
   if (typeof raw !== "object" || raw === null) return empty;
   const obj = raw as Record<string, unknown>;
+  const theme = THEME_KEYS.includes(obj.theme as ThemeKey) ? (obj.theme as ThemeKey) : empty.theme;
   const font = FONTS.some((option) => option.key === obj.font) ? (obj.font as FontKey) : empty.font;
   return {
+    theme,
     font,
     light: normalizeModePalette(obj.light),
     dark: normalizeModePalette(obj.dark),
