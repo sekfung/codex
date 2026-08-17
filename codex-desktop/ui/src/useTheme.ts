@@ -10,7 +10,7 @@ import {
 import type { ReactNode } from "react";
 
 import { THEME_TOKEN_KEYS, emptyCustomization, fontFamily, isHexColor, normalizeCustomization } from "./themeTokens";
-import type { FontKey, PaletteMode, ThemeCustomization, ThemeTokenKey } from "./themeTokens";
+import type { FontKey, PaletteMode, ThemeCustomization, ThemeKey, ThemeTokenKey } from "./themeTokens";
 import { effectivePalette } from "./themePresets";
 
 // Basic light/dark/system theming plus per-mode token overrides and a font
@@ -57,6 +57,7 @@ interface ThemeValue {
   setToken: (mode: PaletteMode, token: ThemeTokenKey, hex: string | null) => void;
   resetModeTokens: (mode: PaletteMode) => void;
   setFont: (font: FontKey) => void;
+  setTheme: (theme: ThemeKey) => void;
 }
 
 const ThemeContext = createContext<ThemeValue | null>(null);
@@ -115,6 +116,10 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     setCustomization((prev) => ({ ...prev, font }));
   }, []);
 
+  const setTheme = useCallback((theme: ThemeKey) => {
+    setCustomization((prev) => ({ ...prev, theme }));
+  }, []);
+
   const value = useMemo<ThemeValue>(
     () => ({
       mode,
@@ -124,8 +129,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       setToken,
       resetModeTokens,
       setFont,
+      setTheme,
     }),
-    [mode, systemDark, customization, setToken, resetModeTokens, setFont],
+    [mode, systemDark, customization, setToken, resetModeTokens, setFont, setTheme],
   );
 
   return createElement(ThemeContext.Provider, { value }, children);
