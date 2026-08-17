@@ -1,4 +1,4 @@
-//! Commands behind the 连接 / 钩子 / 插件 / 账户 settings screens.
+//! Commands behind the 连接 / 钩子 / 插件 settings screens.
 //!
 //! Split out of `commands.rs` purely for size; the contract is identical —
 //! thin wrappers that forward to an app-server RPC and hand the raw JSON-RPC
@@ -10,7 +10,6 @@
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::HooksListParams;
 use codex_app_server_protocol::ListMcpServerStatusParams;
-use codex_app_server_protocol::LoginAccountParams;
 use codex_app_server_protocol::MarketplaceAddParams;
 use codex_app_server_protocol::MarketplaceRemoveParams;
 use codex_app_server_protocol::MarketplaceUpgradeParams;
@@ -228,68 +227,6 @@ pub async fn upgrade_marketplace(
         .request(ClientRequest::MarketplaceUpgrade {
             request_id: bridge.next_request_id(),
             params: MarketplaceUpgradeParams { marketplace_name },
-        })
-        .await
-}
-
-// --- Account (账户) ---------------------------------------------------------
-//
-// Read plus sign-in/sign-out. There is deliberately no billing, upgrade or
-// credit-purchase call here: `account/rateLimitResetCredit/consume` and
-// `account/sendAddCreditsNudgeEmail` exist in the protocol and are
-// intentionally not wrapped.
-
-/// Aggregate token usage. Distinct from `account/rateLimits/read`, which is
-/// about current limits; this is lifetime/daily history.
-#[tauri::command]
-pub async fn read_account_usage(bridge: State<'_, AppServerBridge>) -> CmdResult<JsonValue> {
-    bridge
-        .request(ClientRequest::GetAccountTokenUsage {
-            request_id: bridge.next_request_id(),
-            params: None,
-        })
-        .await
-}
-
-/// Begins ChatGPT sign-in. Returns `{ loginId, authUrl }`; the caller opens
-/// `authUrl` and waits for the `account/login/completed` notification.
-///
-/// `codexStreamlinedLogin` and `useHostedLoginSuccessPage` are left at their
-/// defaults, and `appBrand` unset — Codex Desktop has no hosted success page
-/// of its own to point at.
-#[tauri::command]
-pub async fn start_account_login(bridge: State<'_, AppServerBridge>) -> CmdResult<JsonValue> {
-    bridge
-        .request(ClientRequest::LoginAccount {
-            request_id: bridge.next_request_id(),
-            params: LoginAccountParams::Chatgpt {
-                codex_streamlined_login: false,
-                use_hosted_login_success_page: false,
-                app_brand: None,
-            },
-        })
-        .await
-}
-
-#[tauri::command]
-pub async fn cancel_account_login(
-    bridge: State<'_, AppServerBridge>,
-    login_id: String,
-) -> CmdResult<JsonValue> {
-    bridge
-        .request(ClientRequest::CancelLoginAccount {
-            request_id: bridge.next_request_id(),
-            params: codex_app_server_protocol::CancelLoginAccountParams { login_id },
-        })
-        .await
-}
-
-#[tauri::command]
-pub async fn logout_account(bridge: State<'_, AppServerBridge>) -> CmdResult<JsonValue> {
-    bridge
-        .request(ClientRequest::LogoutAccount {
-            request_id: bridge.next_request_id(),
-            params: None,
         })
         .await
 }

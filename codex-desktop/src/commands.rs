@@ -14,7 +14,6 @@
 //! discouraged.
 
 use codex_app_server_protocol::ClientRequest;
-use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::PermissionGrantScope;
 use codex_app_server_protocol::ThreadArchiveParams;
@@ -473,43 +472,6 @@ pub async fn fork_thread(
                 last_turn_id,
                 ..Default::default()
             },
-        })
-        .await
-}
-
-// --- Account (read-only) ---------------------------------------------------
-//
-// Identity, plan and consumption are surfaced for information only: there is
-// deliberately no billing, upgrade or top-up path anywhere in this app, so
-// these are reads with no corresponding writes.
-
-/// Reads the signed-in account. `refreshToken: false` — this is a passive
-/// read for the sidebar footer, not a login flow, and a proactive token
-/// refresh on every startup would be a surprising side effect of showing a
-/// name. `account/updated` keeps it current afterwards.
-#[tauri::command]
-pub async fn read_account(bridge: State<'_, AppServerBridge>) -> CmdResult<JsonValue> {
-    bridge
-        .request(ClientRequest::GetAccount {
-            request_id: bridge.next_request_id(),
-            params: GetAccountParams {
-                refresh_token: false,
-            },
-        })
-        .await
-}
-
-/// Reads the rate-limit snapshot behind the usage indicator.
-///
-/// Exhaustion is taken from the backend's own `rateLimitReachedType` /
-/// `spendControlReached` fields rather than from a percentage threshold
-/// invented here — the app reports what the server says, or says nothing.
-#[tauri::command]
-pub async fn read_account_rate_limits(bridge: State<'_, AppServerBridge>) -> CmdResult<JsonValue> {
-    bridge
-        .request(ClientRequest::GetAccountRateLimits {
-            request_id: bridge.next_request_id(),
-            params: None,
         })
         .await
 }
