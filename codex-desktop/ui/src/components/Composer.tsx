@@ -358,9 +358,9 @@ export function Composer({ threadId }: { threadId: string }) {
    *
    * The Official App's `@` opens a unified insertion menu, not a file picker:
    * an 添加 section (files and folders, 目标, 计划模式) sits above the file
-   * results. Only the 目标 entry is implemented here — 计划模式 and the
-   * 插件 / ChatGPT 对话 sections are separate capabilities, and one of them
-   * (cross-conversation references) has no basis in this engine at all.
+   * results. Only the 目标 entry is implemented here —
+   * 计划模式 and the 插件 sections are separate capabilities; cross-conversation
+   * references have no basis in this engine at all.
    *
    * Goal and file results share one flat list so arrow keys move through the
    * menu as a whole rather than through two lists that each think they own

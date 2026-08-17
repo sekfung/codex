@@ -11,8 +11,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 /**
  * `/status` — "show current session configuration and token usage".
  *
- * Assembled entirely from state this client already holds: account and rate
- * limits (`account/read`, `account/rateLimits/read`), model and effort
+ * Assembled entirely from state this client already holds: model and effort
  * (`model/list` + the composer's selection), collaboration mode, personality,
  * context usage (`thread/tokenUsage/updated`) and the thread's own identity.
  * No new RPC — the TUI's status card reads the same set from its session
