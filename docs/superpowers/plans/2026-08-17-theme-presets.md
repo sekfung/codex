@@ -513,3 +513,5 @@ git commit -m "feat(desktop): add preset theme picker to appearance settings"
 ## Amendment
 
 - **Task 4 Step 1 导入来源错误（实施时修正）**：计划原文写 `import { PRESET_PALETTES, THEME_PRESETS, effectivePalette } from "../../themePresets";`，但 `PRESET_PALETTES` 由 `themePresetData.ts` 导出（`themePresets.ts` 仅 import 未 re-export）。实现者按设计（spec 2026-08-17-theme-presets-design.md 数据放 themePresetData.ts）修正为 `PRESET_PALETTES` 从 `../../themePresetData` 导入、`THEME_PRESETS`/`effectivePalette` 从 `../../themePresets` 导入，其余代码逐字保留。已提交 `6066f1997`。
+
+- **Task 4 UI 形式变更（用户要求，已提交 `fad885aac`）**：用户反馈 chip 网格排版不佳，改为下拉选择框形式。实现：共享 `Select` 组件 `SelectOption` 增可选 `swatch?: { light; dark }` 字段（纯增量，触发器与每个选项渲染双色小色板，现有调用方不受影响）；「预设主题」区由 chip 网格改为 `SettingRow + Select`，选项色板经 `basePalette("light"/"dark", key).background` 计算（顺带消除原 chip 实现中与 `basePalette` 重复的取色逻辑）。
