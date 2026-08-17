@@ -19,7 +19,6 @@ import type {
   ThreadItem,
   ThreadTokenUsage,
   ImportTypeResult,
-  RateLimitSnapshot,
   TurnStatus,
 } from "../types";
 import type { Action } from "./reducer";
@@ -35,7 +34,6 @@ type Params = Record<string, unknown>;
  * reaching for module-level state.
  */
 export interface NotificationEffects {
-  refetchAccount: () => void;
   refetchSkills: () => void;
   refetchApps: () => void;
   /**
@@ -230,34 +228,6 @@ const NOTIFICATION_HANDLERS: Record<string, NotificationHandler> = {
 
   "thread/unarchived": ({ p, dispatch }) =>
     dispatch({ type: "THREAD_REMOVED_FROM_ARCHIVE", threadId: String(p.threadId) }),
-
-  // Account. Read-only: nothing in this app writes account or billing state.
-  "account/updated": ({ p, dispatch, effects }) => {
-    // The notification carries only `authMode`/`planType` — never the email —
-    // so a plan change can be merged in place, but anything that could have
-    // changed *which* account is signed in has to come from `account/read`.
-    dispatch({
-      type: "ACCOUNT_PLAN_UPDATED",
-      planType: typeof p.planType === "string" ? p.planType : null,
-    });
-    effects.refetchAccount();
-  },
-
-  "account/rateLimits/updated": ({ p, dispatch }) =>
-    dispatch({
-      type: "RATE_LIMITS_MERGED",
-      rateLimits: p.rateLimits as RateLimitSnapshot,
-    }),
-
-  "account/login/completed": ({ p, dispatch, effects }) => {
-    // `success: false` carries the reason; either way the account itself has
-    // to be re-read, since the notification never carries identity.
-    dispatch({
-      type: "LOGIN_COMPLETED",
-      error: p.success === true ? null : String(p.error ?? "登录未完成"),
-    });
-    effects.refetchAccount();
-  },
 
   // MCP startup state. The only source for this — `mcpServerStatus/list`
   // reports auth status but never whether the server actually came up.

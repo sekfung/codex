@@ -7,7 +7,6 @@
  * backend — every transition is a pure function of the previous state.
  */
 import type {
-  Account,
   ApprovalMode,
   BackgroundTerminalView,
   CodexConfig,
@@ -24,10 +23,8 @@ import type {
   ModelSelection,
   Notice,
   PendingApproval,
-  PendingLogin,
   Project,
   QueuedSubmissionView,
-  RateLimitSnapshot,
   SkillMetadata,
   ThreadGoal,
   ThreadHistoryMode,
@@ -186,13 +183,6 @@ export interface State {
    */
   archivedVisible: Record<string, boolean>;
   search: SearchState;
-  /**
-   * Read-only account state. There is deliberately no billing, upgrade or
-   * top-up affordance anywhere in this app, so nothing writes these.
-   */
-  account: Account | null;
-  requiresOpenaiAuth: boolean;
-  rateLimits: RateLimitSnapshot | null;
   activeThreadId: string | null;
   /**
    * Threads navigated *into* from another thread, most recent last, each with
@@ -300,8 +290,6 @@ export interface State {
    * failed before this window opened has no entry here.
    */
   mcpRuntime: Record<string, McpServerRuntimeState>;
-  /** In-flight ChatGPT sign-in. Cleared by `account/login/completed`. */
-  pendingLogin: PendingLogin | null;
   /**
    * Every skill `skills/list` reports across the open Projects, **including
    * disabled ones**, refreshed on `skills/changed`. Empty is a legitimate
@@ -351,10 +339,6 @@ export type Action =
   | { type: "SEARCH_SUCCEEDED"; results: ThreadSearchResult[] }
   | { type: "SEARCH_FAILED"; error: string }
   | { type: "SEARCH_EXITED" }
-  | { type: "ACCOUNT_LOADED"; account: Account | null; requiresOpenaiAuth: boolean }
-  | { type: "ACCOUNT_PLAN_UPDATED"; planType: string | null }
-  | { type: "RATE_LIMITS_LOADED"; rateLimits: RateLimitSnapshot }
-  | { type: "RATE_LIMITS_MERGED"; rateLimits: RateLimitSnapshot }
   | { type: "ACTIVE_THREAD_SET"; threadId: string | null; keepTrail?: boolean }
   | {
       type: "THREAD_DRILLED_INTO";
@@ -422,9 +406,7 @@ export type Action =
   | { type: "SETTINGS_SCREEN_SET"; screen: string | null }
   | { type: "NOTICE_PUSHED"; notice: Notice }
   | { type: "NOTICE_DISMISSED"; id: string }
-  | { type: "MCP_RUNTIME_UPDATED"; name: string; runtime: McpServerRuntimeState }
-  | { type: "LOGIN_STARTED"; login: PendingLogin }
-  | { type: "LOGIN_COMPLETED"; error: string | null };
+  | { type: "MCP_RUNTIME_UPDATED"; name: string; runtime: McpServerRuntimeState };
 
 function withThread(state: State, threadId: string, update: (thread: ThreadState) => ThreadState): State {
   const current = state.threads[threadId] ?? emptyThread();
@@ -456,25 +438,6 @@ function mapThreadListsWhole(
   return Object.fromEntries(
     Object.entries(lists).map(([path, threads]) => [path, update(threads)]),
   );
-}
-
-/**
- * Merges a sparse rolling rate-limit update over the last full snapshot.
- * Only `rate_limits` itself is non-optional on the notification; every field
- * inside it may be absent, and absent means "unchanged".
- */
-function mergeRateLimits(
-  previous: RateLimitSnapshot | null,
-  update: RateLimitSnapshot,
-): RateLimitSnapshot {
-  if (!previous) return update;
-  const merged: RateLimitSnapshot = { ...previous };
-  for (const [key, value] of Object.entries(update)) {
-    if (value !== null && value !== undefined) {
-      (merged as Record<string, unknown>)[key] = value;
-    }
-  }
-  return merged;
 }
 
 export function reducer(state: State, action: Action): State {
@@ -566,23 +529,6 @@ export function reducer(state: State, action: Action): State {
       };
     case "SEARCH_EXITED":
       return { ...state, search: emptySearch() };
-    case "ACCOUNT_LOADED":
-      return {
-        ...state,
-        account: action.account,
-        requiresOpenaiAuth: action.requiresOpenaiAuth,
-      };
-    case "ACCOUNT_PLAN_UPDATED":
-      // `account/updated` is sparse — it carries authMode/planType but never
-      // the email, so this merges rather than replacing the account.
-      if (!state.account || state.account.type !== "chatgpt" || !action.planType) return state;
-      return { ...state, account: { ...state.account, planType: action.planType } };
-    case "RATE_LIMITS_LOADED":
-      return { ...state, rateLimits: action.rateLimits };
-    case "RATE_LIMITS_MERGED":
-      // The protocol documents `account/rateLimits/updated` as a *sparse
-      // rolling update*: absent fields mean "unchanged", not "cleared".
-      return { ...state, rateLimits: mergeRateLimits(state.rateLimits, action.rateLimits) };
     case "SKILLS_LOADED":
       return { ...state, skills: action.skills };
     case "APPS_LOADED":
@@ -957,18 +903,6 @@ export function reducer(state: State, action: Action): State {
         ...state,
         mcpRuntime: { ...state.mcpRuntime, [action.name]: action.runtime },
       };
-    case "LOGIN_STARTED":
-      return { ...state, pendingLogin: action.login };
-    case "LOGIN_COMPLETED":
-      // Keep the panel up with the reason on failure; clear it on success.
-      return {
-        ...state,
-        pendingLogin: action.error
-          ? state.pendingLogin
-            ? { ...state.pendingLogin, error: action.error }
-            : null
-          : null,
-      };
     default:
       return state;
   }
@@ -981,9 +915,6 @@ export const initialState: State = {
   archivedThreadsByProject: {},
   archivedVisible: {},
   search: emptySearch(),
-  account: null,
-  requiresOpenaiAuth: false,
-  rateLimits: null,
   activeThreadId: null,
   threadTrail: [],
   threads: {},
@@ -1009,7 +940,6 @@ export const initialState: State = {
   personality: null,
   features: [],
   mcpRuntime: {},
-  pendingLogin: null,
   skills: [],
   apps: [],
 };

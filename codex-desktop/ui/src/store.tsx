@@ -17,7 +17,6 @@ import type {
   ComposerSkill,
   Personality,
   ModelSelection,
-  PendingLogin,
   ReviewDelivery,
   ReviewTargetInput,
   SettingEdit,
@@ -144,14 +143,6 @@ interface StoreValue {
   setDefaultApprovalMode: (mode: ApprovalMode) => Promise<void>;
   writeSetting: (edit: SettingEdit) => Promise<void>;
   reloadConfig: () => Promise<void>;
-  /**
-   * Account sign-in / sign-out (账户 screen). Read-only elsewhere: this app
-   * has no billing, upgrade or credit-purchase path anywhere.
-   */
-  startLogin: () => Promise<void>;
-  cancelLogin: () => Promise<void>;
-  logout: () => Promise<void>;
-  refreshAccount: () => void;
 }
 
 const StoreContext = createContext<StoreValue | null>(null);
@@ -191,10 +182,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   collaborationModeRef.current = state.collaborationMode;
   const personalityRef = useRef<Personality | null>(initialState.personality);
   personalityRef.current = state.personality;
-  // Read at call time so cancelling targets the login that is actually in
-  // flight, not one captured when the callback was created.
-  const pendingLoginRef = useRef<PendingLogin | null>(null);
-  pendingLoginRef.current = state.pendingLogin;
 
   useEffect(() => {
     api
@@ -276,24 +263,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       )
       .catch((error) => tracingWarn(`configRequirements/read failed: ${String(error)}`));
   }, [reloadConfig]);
-
-  /**
-   * Read-only account state for the sidebar footer. A failure here leaves the
-   * footer showing nothing identifying rather than blocking the app — being
-   * signed in is not a precondition for the UI to render.
-   */
-  const refetchAccount = useCallback(() => {
-    api
-      .readAccount()
-      .then((response) =>
-        dispatch({
-          type: "ACCOUNT_LOADED",
-          account: response.account ?? null,
-          requiresOpenaiAuth: response.requiresOpenaiAuth ?? false,
-        }),
-      )
-      .catch((error) => tracingWarn(`account/read failed: ${String(error)}`));
-  }, []);
 
   /**
    * `skills/list` across the open Projects, so repo-local skills resolve.
@@ -404,7 +373,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     api
       .onAppServerEvent((envelope) =>
         handleEvent(envelope, dispatch, {
-          refetchAccount,
           refetchSkills,
           refetchApps,
           computeContextUsage,
@@ -421,23 +389,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       });
     return () => unlisten?.();
   }, [
-    refetchAccount,
     refetchSkills,
     refetchApps,
     computeContextUsage,
     applyThreadSettings,
     refetchQueue,
   ]);
-
-  useEffect(() => {
-    refetchAccount();
-    api
-      .readAccountRateLimits()
-      .then((response) =>
-        dispatch({ type: "RATE_LIMITS_LOADED", rateLimits: response.rateLimits }),
-      )
-      .catch((error) => tracingWarn(`account/rateLimits/read failed: ${String(error)}`));
-  }, [refetchAccount]);
 
   // Debounced search. Runs off the committed term rather than per keystroke,
   // and a stale in-flight response is discarded so fast typing can't let an
@@ -1057,52 +1014,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     await api.interruptTurn(threadId, turnId);
   }, []);
 
-  /**
-   * Starts ChatGPT sign-in and opens the returned URL. `account/login/start`
-   * only *begins* the flow — completion arrives as
-   * `account/login/completed`, which is what clears `pendingLogin`.
-   */
-  const startLogin = useCallback(async () => {
-    const response = await api.startAccountLogin();
-    if (response.type === "chatgpt") {
-      dispatch({
-        type: "LOGIN_STARTED",
-        login: { loginId: response.loginId, authUrl: response.authUrl, error: null },
-      });
-      // Reuses the OS handler already used for `config.toml`; `open`/`start`/
-      // `xdg-open` all take URLs as readily as paths.
-      await api.openPathInOs(response.authUrl);
-      return;
-    }
-    if (response.type === "chatgptDeviceCode") {
-      dispatch({
-        type: "LOGIN_STARTED",
-        login: {
-          loginId: response.loginId,
-          authUrl: response.verificationUrl,
-          error: `请在浏览器中输入代码：${response.userCode}`,
-        },
-      });
-      await api.openPathInOs(response.verificationUrl);
-      return;
-    }
-    // The remaining arms complete server-side with no URL to visit.
-    dispatch({ type: "LOGIN_COMPLETED", error: null });
-    refetchAccount();
-  }, [refetchAccount]);
-
-  const cancelLogin = useCallback(async () => {
-    const loginId = pendingLoginRef.current?.loginId;
-    if (!loginId) return;
-    await api.cancelAccountLogin(loginId);
-    dispatch({ type: "LOGIN_COMPLETED", error: null });
-  }, []);
-
-  const logout = useCallback(async () => {
-    await api.logoutAccount();
-    refetchAccount();
-  }, [refetchAccount]);
-
   const value = useMemo<StoreValue>(
     () => ({
       state,
@@ -1151,10 +1062,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setDefaultApprovalMode,
       writeSetting,
       reloadConfig,
-      startLogin,
-      cancelLogin,
-      logout,
-      refreshAccount: refetchAccount,
     }),
     [
       state,
@@ -1202,10 +1109,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setDefaultApprovalMode,
       writeSetting,
       reloadConfig,
-      startLogin,
-      cancelLogin,
-      logout,
-      refetchAccount,
     ],
   );
 
