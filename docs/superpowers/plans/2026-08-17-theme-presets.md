@@ -436,7 +436,8 @@ import { useTheme } from "../../useTheme";
 import type { ThemeMode } from "../../useTheme";
 import { DEFAULT_PALETTE, FONTS } from "../../themeTokens";
 import type { PaletteMode, ThemeTokenKey } from "../../themeTokens";
-import { PRESET_PALETTES, THEME_PRESETS, effectivePalette } from "../../themePresets";
+import { PRESET_PALETTES } from "../../themePresetData";
+import { THEME_PRESETS, effectivePalette } from "../../themePresets";
 import { SettingsHeader, SettingsSection, SettingRow } from "./SettingsPrimitives";
 import { ThemeTokenEditor } from "./ThemeTokenEditor";
 import { Select } from "@/components/ui/select";
@@ -506,3 +507,9 @@ git commit -m "feat(desktop): add preset theme picker to appearance settings"
 3. 恢复默认回落当前基准（预设 B 的色值，而非内置默认）。
 4. `modern-minimal` 深色下 `sidebar-border` 为半透明白（alpha 例外正常），其取色器不崩溃。
 5. 重启应用后所选预设保留；老存档（无 `theme` 字段）打开默认主题不报错。
+
+---
+
+## Amendment
+
+- **Task 4 Step 1 导入来源错误（实施时修正）**：计划原文写 `import { PRESET_PALETTES, THEME_PRESETS, effectivePalette } from "../../themePresets";`，但 `PRESET_PALETTES` 由 `themePresetData.ts` 导出（`themePresets.ts` 仅 import 未 re-export）。实现者按设计（spec 2026-08-17-theme-presets-design.md 数据放 themePresetData.ts）修正为 `PRESET_PALETTES` 从 `../../themePresetData` 导入、`THEME_PRESETS`/`effectivePalette` 从 `../../themePresets` 导入，其余代码逐字保留。已提交 `6066f1997`。
