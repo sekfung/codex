@@ -17,6 +17,11 @@ export interface SelectOption<T extends string> {
    * its label alone (reasoning efforts, web-search modes).
    */
   hint?: string;
+  /**
+   * Optional two-tone swatch (e.g. light/dark preview of a theme preset),
+   * shown next to the label in the trigger and each option.
+   */
+  swatch?: { light: string; dark: string };
 }
 
 interface SelectProps<T extends string> {
@@ -68,11 +73,19 @@ export function Select<T extends string>({
             className,
           )}
         >
-          <span className={cn("truncate", !selected && "text-muted-foreground")}>
-            {/* An unrecognized value is shown verbatim rather than as the
-                placeholder: silently displaying "未设置" for a value that *is*
-                set would misreport the config actually in force. */}
-            {selected?.label ?? (value ?? placeholder)}
+          <span className="flex min-w-0 items-center gap-1.5">
+            {selected?.swatch && (
+              <span className="flex h-3.5 w-5 shrink-0 overflow-hidden rounded-[4px] border border-border">
+                <span className="w-1/2" style={{ backgroundColor: selected.swatch.light }} />
+                <span className="w-1/2" style={{ backgroundColor: selected.swatch.dark }} />
+              </span>
+            )}
+            <span className={cn("truncate", !selected && "text-muted-foreground")}>
+              {/* An unrecognized value is shown verbatim rather than as the
+                  placeholder: silently displaying "未设置" for a value that *is*
+                  set would misreport the config actually in force. */}
+              {selected?.label ?? (value ?? placeholder)}
+            </span>
           </span>
           <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
         </button>
@@ -88,6 +101,12 @@ export function Select<T extends string>({
               onValueChange?.(option.value);
             }}
           >
+            {option.swatch && (
+              <span className="mt-1 flex h-3.5 w-5 shrink-0 overflow-hidden rounded-[4px] border border-border">
+                <span className="w-1/2" style={{ backgroundColor: option.swatch.light }} />
+                <span className="w-1/2" style={{ backgroundColor: option.swatch.dark }} />
+              </span>
+            )}
             <span className="min-w-0 flex-1">
               <span className="block text-[13px]">{option.label}</span>
               {option.hint && (

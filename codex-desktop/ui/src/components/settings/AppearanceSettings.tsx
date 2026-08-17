@@ -2,10 +2,9 @@ import { Check } from "lucide-react";
 
 import { useTheme } from "../../useTheme";
 import type { ThemeMode } from "../../useTheme";
-import { DEFAULT_PALETTE, FONTS } from "../../themeTokens";
+import { FONTS } from "../../themeTokens";
 import type { PaletteMode, ThemeTokenKey } from "../../themeTokens";
-import { PRESET_PALETTES } from "../../themePresetData";
-import { THEME_PRESETS, effectivePalette } from "../../themePresets";
+import { THEME_PRESETS, basePalette, effectivePalette } from "../../themePresets";
 import { SettingsHeader, SettingsSection, SettingRow } from "./SettingsPrimitives";
 import { ThemeTokenEditor } from "./ThemeTokenEditor";
 import { Select } from "@/components/ui/select";
@@ -74,40 +73,24 @@ export function AppearanceSettings() {
       </SettingsSection>
 
       <SettingsSection title="预设主题">
-        <div className="grid grid-cols-4 gap-3 px-4 py-3.5">
-          {THEME_PRESETS.map((preset) => {
-            const active = customization.theme === preset.key;
-            const swatch =
-              preset.key === "default"
-                ? { light: DEFAULT_PALETTE.light.background, dark: DEFAULT_PALETTE.dark.background }
-                : {
-                    light: PRESET_PALETTES[preset.key].light.background,
-                    dark: PRESET_PALETTES[preset.key].dark.background,
-                  };
-            return (
-              <button
-                key={preset.key}
-                type="button"
-                aria-pressed={active}
-                onClick={() => setTheme(preset.key)}
-                className="group flex flex-col gap-1.5"
-              >
-                <span
-                  className={cn(
-                    "flex h-10 w-full overflow-hidden rounded-lg border-2 transition-colors",
-                    active ? "border-primary" : "border-border group-hover:border-muted-foreground/40",
-                  )}
-                >
-                  <span className="w-1/2" style={{ backgroundColor: swatch.light }} />
-                  <span className="w-1/2" style={{ backgroundColor: swatch.dark }} />
-                </span>
-                <span className={cn("text-center text-xs", active ? "font-medium" : "text-muted-foreground")}>
-                  {preset.label}
-                </span>
-              </button>
-            );
-          })}
-        </div>
+        <SettingRow
+          label="预设主题"
+          description="切换内置的 Minimal 系列配色；已有的逐项微调会叠加保留。"
+          control={
+            <Select
+              value={customization.theme}
+              options={THEME_PRESETS.map(({ key, label }) => ({
+                value: key,
+                label,
+                swatch: {
+                  light: basePalette("light", key).background,
+                  dark: basePalette("dark", key).background,
+                },
+              }))}
+              onValueChange={setTheme}
+            />
+          }
+        />
       </SettingsSection>
 
       <SettingsSection title="自定义">
