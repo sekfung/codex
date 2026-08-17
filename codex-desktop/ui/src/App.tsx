@@ -10,7 +10,6 @@ import { Composer } from "./components/Composer";
 import { NoticeBar } from "./components/NoticeBar";
 import { ThreadTrailBar } from "./components/ThreadTrailBar";
 import { StartupFailure } from "./components/StartupFailure";
-import { UsageNotice } from "./components/UsageNotice";
 import { SettingsShell } from "./components/settings/SettingsShell";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
@@ -38,7 +37,6 @@ function MainPane() {
       <ThreadTrailBar />
       <ChatStream threadId={threadId} />
       <NoticeBar />
-      <UsageNotice />
       <Composer threadId={threadId} />
     </main>
   );

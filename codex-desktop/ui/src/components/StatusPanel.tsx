@@ -27,7 +27,6 @@ export function StatusPanel({ threadId }: { threadId: string }) {
   const summary = findThread(state.threadsByProject, threadId);
   const model = state.models.find((entry) => entry.model === state.modelSelection.model);
   const usage = thread?.contextUsage ?? null;
-  const limits = state.rateLimits;
 
   // Read when the panel opens, not on mount: this runs git, and the panel is
   // opened far less often than the chat renders. A failure leaves the section
@@ -98,14 +97,6 @@ export function StatusPanel({ threadId }: { threadId: string }) {
             <Row label="用量" value="尚未开始统计" />
           )}
         </Section>
-
-        <Section title="账户">
-          <Row label="登录" value={accountLabel(state.account, state.requiresOpenaiAuth)} />
-          {limits?.primary?.usedPercent !== undefined && (
-            <Row label="额度已用" value={`${Math.round(limits.primary.usedPercent)}%`} />
-          )}
-          {limits?.rateLimitReachedType && <Row label="限额" value="已达上限" />}
-        </Section>
       </PopoverContent>
     </Popover>
   );
@@ -129,23 +120,6 @@ function Row({ label, value, mono }: { label: string; value: string; mono?: bool
       </span>
     </div>
   );
-}
-
-/**
- * Distinguishes "signed out" from "not loaded yet" — the account read is
- * asynchronous, and reporting an empty result as signed-out would be wrong
- * during startup.
- */
-function accountLabel(
-  account: ReturnType<typeof useStore>["state"]["account"],
-  requiresOpenaiAuth: boolean,
-): string {
-  if (account) {
-    if (account.type === "chatgpt") return account.email ?? "ChatGPT";
-    if (account.type === "apiKey") return "API key";
-    return "Amazon Bedrock";
-  }
-  return requiresOpenaiAuth ? "未登录" : "加载中…";
 }
 
 function findThread(

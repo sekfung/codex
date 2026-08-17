@@ -4,7 +4,6 @@ import {
   Download,
   Blocks,
   Brain,
-  CreditCard,
   FlaskConical,
   GitBranch,
   Keyboard,
@@ -24,7 +23,6 @@ import { GeneralSettings } from "./GeneralSettings";
 import { AppearanceSettings } from "./AppearanceSettings";
 import { ConfigSettings } from "./ConfigSettings";
 import { ImportSettings } from "./ImportSettings";
-import { AccountSettings } from "./AccountSettings";
 import { ConnectionsSettings } from "./ConnectionsSettings";
 import { HooksSettings } from "./HooksSettings";
 import { MemoriesSettings } from "./MemoriesSettings";
@@ -67,8 +65,6 @@ const NAV_GROUPS: NavGroup[] = [
       { id: "config", label: "配置", Icon: Sliders, ready: true },
       { id: "memories", label: "记忆", Icon: Brain, ready: true },
       { id: "keyboard", label: "键盘快捷键", Icon: Keyboard },
-      { id: "usage", label: "使用情况和计费", Icon: CreditCard },
-      { id: "account", label: "账户", Icon: User, ready: true },
     ],
   },
   {
@@ -184,7 +180,6 @@ export function SettingsShell() {
           {active === "appearance" && <AppearanceSettings />}
           {active === "config" && <ConfigSettings />}
           {active === "import" && <ImportSettings />}
-          {active === "account" && <AccountSettings />}
           {active === "plugins" && <PluginsSettings />}
           {active === "connections" && <ConnectionsSettings />}
           {active === "hooks" && <HooksSettings />}

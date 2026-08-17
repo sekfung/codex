@@ -28,7 +28,6 @@ import type { ThemeMode } from "../useTheme";
 import { Button } from "@/components/ui/button";
 import { Menu, MenuItem, MenuLabel, MenuSeparator } from "@/components/ui/menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { AccountFooter } from "./AccountFooter";
 import { cn } from "@/lib/utils";
 
 const THEME_MODES: { mode: ThemeMode; label: string; Icon: typeof Sun }[] = [
@@ -175,7 +174,6 @@ export function Sidebar() {
       )}
 
       <footer className="flex items-center justify-between gap-2 border-t border-sidebar-border px-3 py-2.5">
-        <AccountFooter />
         <div className="flex shrink-0 items-center gap-0.5">
           <Tooltip>
             <TooltipTrigger asChild>
