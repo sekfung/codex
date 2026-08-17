@@ -15,16 +15,12 @@ import type {
   ContextUsage,
   FeatureFlag,
   FileSearchHit,
-  GetAccountRateLimitsResponse,
   BranchStatus,
   GitDiffResult,
   GitRefs,
   RemoteDiffResult,
-  GetAccountResponse,
-  GetAccountTokenUsageResponse,
   HooksListResponse,
   ListMcpServerStatusResponse,
-  LoginAccountResponse,
   MarketplaceUpgradeResponse,
   McpServerOauthLoginResponse,
   MemorySettings,
@@ -151,7 +147,7 @@ export const deleteThread = (threadId: string) =>
 export const searchThreads = (searchTerm: string, limit?: number) =>
   invoke<ThreadSearchResponse>("search_threads", { searchTerm, limit: limit ?? null });
 
-// -- Account (read-only: no billing, upgrade or top-up path exists) ----------
+// -- Agent-thread identity ------------------------------------------------
 
 /**
  * Identity of a sub-agent thread, for labelling drill-ins.
@@ -171,9 +167,6 @@ export interface AgentThreadInfo {
 export const readAgentThread = (threadId: string) =>
   invoke<AgentThreadInfo>("read_agent_thread", { threadId });
 
-export const readAccount = () => invoke<GetAccountResponse>("read_account");
-export const readAccountRateLimits = () =>
-  invoke<GetAccountRateLimitsResponse>("read_account_rate_limits");
 export const startThread = (
   cwd: string,
   approvalMode?: ApprovalMode,
@@ -575,18 +568,6 @@ export const upgradeMarketplace = (marketplaceName?: string | null) =>
   invoke<MarketplaceUpgradeResponse>("upgrade_marketplace", {
     marketplaceName: marketplaceName ?? null,
   });
-
-export const readAccountUsage = () =>
-  invoke<GetAccountTokenUsageResponse>("read_account_usage");
-/**
- * Sign-in and sign-out only. Nothing here touches billing or credits —
- * `account/rateLimitResetCredit/consume` and the add-credits nudge exist in
- * the protocol and are deliberately not wrapped.
- */
-export const startAccountLogin = () => invoke<LoginAccountResponse>("start_account_login");
-export const cancelAccountLogin = (loginId: string) =>
-  invoke<OpaqueResult>("cancel_account_login", { loginId });
-export const logoutAccount = () => invoke<OpaqueResult>("logout_account");
 
 // -- Queue (`thread/queue/*`) ------------------------------------------------
 //
