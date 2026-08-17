@@ -952,26 +952,24 @@ function PreviewPane({ palette }: { palette: Record<ThemeTokenKey, string> }) {
 
 - [ ] **Step 2: 给 index.css 加 react-colorful 样式**
 
-在 `codex-desktop/ui/src/index.css` 顶部、`@import "tailwindcss";` 之前加入：
+react-colorful 5.8.0 没有 `styles.css`（其基础样式由组件挂载时向 `<head>` 注入的 `<style>` 提供），因此**不要**写 `@import "react-colorful/styles.css"`——该导入无法解析。
 
-```css
-@import "react-colorful/styles.css";
-```
-
-在 `@layer components { ... }` 块内（`@keyframes` 之后）追加：
+在 `@layer components { ... }` 块内（`@keyframes` 之后）追加。注入样式选择器特异性为 (0,1,0) 且注入时间晚于本文件，等同特异性会输给它，所以用 `.popover-surface` 提升一层特异性来可靠覆盖：
 
 ```css
   /* react-colorful picker inside the Appearance popover: fill the popover
-     and match the app's radius so it doesn't read as a foreign widget. */
-  .react-colorful {
+     and match the app's radius so it doesn't read as a foreign widget.
+     The library injects its own <style> at mount, so these overrides need
+     the extra .popover-surface specificity to win the cascade. */
+  .popover-surface .react-colorful {
     width: 100%;
   }
 
-  .react-colorful__saturation {
+  .popover-surface .react-colorful__saturation {
     border-radius: calc(var(--radius) - 2px);
   }
 
-  .react-colorful__last-control {
+  .popover-surface .react-colorful__last-control {
     border-radius: var(--radius);
   }
 ```
