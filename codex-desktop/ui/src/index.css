@@ -208,4 +208,20 @@
       animation: none;
     }
   }
+
+  /* react-colorful picker inside the Appearance popover: fill the popover
+     and match the app's radius so it doesn't read as a foreign widget.
+     The library injects its own <style> at mount, so these overrides need
+     the extra .popover-surface specificity to win the cascade. */
+  .popover-surface .react-colorful {
+    width: 100%;
+  }
+
+  .popover-surface .react-colorful__saturation {
+    border-radius: calc(var(--radius) - 2px);
+  }
+
+  .popover-surface .react-colorful__last-control {
+    border-radius: var(--radius);
+  }
 }
