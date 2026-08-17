@@ -221,71 +221,6 @@ export function threadTitle(thread: ThreadSummary): string {
   return thread.name?.trim() || thread.preview?.trim() || "(未命名)";
 }
 
-// -- Account (read-only; no billing/upgrade surface anywhere) ----------------
-// `v2::Account` is `#[serde(tag = "type")]` over three auth kinds.
-
-export type PlanType =
-  | "free"
-  | "go"
-  | "plus"
-  | "pro"
-  | "pro_lite"
-  | "team"
-  | "business"
-  | "enterprise"
-  | string;
-
-export type Account =
-  | { type: "apiKey" }
-  | { type: "chatgpt"; email?: string | null; planType: PlanType }
-  | { type: "amazonBedrock"; usesCodexManagedCredentials?: boolean };
-
-export interface GetAccountResponse {
-  account?: Account | null;
-  requiresOpenaiAuth: boolean;
-}
-
-export interface RateLimitWindow {
-  usedPercent: number;
-  windowDurationMins?: number | null;
-  /** Unix **seconds** (`resets_at` on the Rust side), not milliseconds. */
-  resetsAt?: number | null;
-}
-
-export interface CreditsSnapshot {
-  hasCredits: boolean;
-  unlimited: boolean;
-  balance?: string | null;
-}
-
-/**
- * Why the backend says usage is blocked. Reported by the server — this app
- * never derives exhaustion from a percentage threshold of its own.
- */
-export type RateLimitReachedType =
-  | "rateLimitReached"
-  | "workspaceOwnerCreditsDepleted"
-  | "workspaceMemberCreditsDepleted"
-  | "workspaceOwnerUsageLimitReached"
-  | "workspaceMemberUsageLimitReached";
-
-export interface RateLimitSnapshot {
-  limitId?: string | null;
-  limitName?: string | null;
-  primary?: RateLimitWindow | null;
-  secondary?: RateLimitWindow | null;
-  credits?: CreditsSnapshot | null;
-  /** `null` means "unavailable", not "false" — see the Rust doc comment. */
-  spendControlReached?: boolean | null;
-  planType?: PlanType | null;
-  rateLimitReachedType?: RateLimitReachedType | null;
-}
-
-export interface GetAccountRateLimitsResponse {
-  rateLimits: RateLimitSnapshot;
-  rateLimitsByLimitId?: Record<string, RateLimitSnapshot> | null;
-}
-
 // -- Model picker (same two-layer pattern as the approval selector) ----------
 // `Model` / `ReasoningEffortOption` (v2/model.rs). `ReasoningEffort` is a
 // plain string on the wire (its Rust enum has hand-written Serialize/Deserialize
@@ -938,39 +873,6 @@ export interface MarketplaceUpgradeResponse {
   selectedMarketplaces: string[];
   upgradedRoots: string[];
   errors: { marketplaceName: string; message: string }[];
-}
-
-// -- Account (账户) ----------------------------------------------------------
-
-export interface AccountTokenUsageSummary {
-  lifetimeTokens?: number | null;
-  peakDailyTokens?: number | null;
-  longestRunningTurnSec?: number | null;
-  currentStreakDays?: number | null;
-  longestStreakDays?: number | null;
-}
-
-export interface GetAccountTokenUsageResponse {
-  summary: AccountTokenUsageSummary;
-  dailyUsageBuckets?: { startDate: string; tokens: number }[] | null;
-}
-
-/**
- * `account/login/start` is a tagged union; only the `chatgpt` arm is used
- * here. Both URL-bearing arms are kept so a device-code response can't be
- * silently mistaken for a failure.
- */
-export type LoginAccountResponse =
-  | { type: "chatgpt"; loginId: string; authUrl: string }
-  | { type: "chatgptDeviceCode"; loginId: string; verificationUrl: string; userCode: string }
-  | { type: "apiKey" }
-  | { type: "chatgptAuthTokens" }
-  | { type: "amazonBedrock" };
-
-export interface PendingLogin {
-  loginId: string;
-  authUrl: string;
-  error?: string | null;
 }
 
 // -- Composer input (item 1 & 2) --------------------------------------------
