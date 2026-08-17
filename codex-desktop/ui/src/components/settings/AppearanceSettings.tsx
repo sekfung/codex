@@ -83,8 +83,8 @@ export function AppearanceSettings() {
                 value: key,
                 label,
                 swatch: {
-                  light: basePalette("light", key).background,
-                  dark: basePalette("dark", key).background,
+                  light: basePalette("light", key).primary,
+                  dark: basePalette("dark", key).primary,
                 },
               }))}
               onValueChange={setTheme}
