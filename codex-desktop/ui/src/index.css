@@ -1,0 +1,234 @@
+@import "tailwindcss";
+
+/* shadcn's class-based dark strategy. `useTheme.ts` toggles `.dark` on
+   <html>; `system` mode follows `prefers-color-scheme` live (ADR-0009). */
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Palette (ADR-0019). The three light-theme anchors are the Official App's
+ * own published token values, read off its Appearance settings screen:
+ *   accent/primary #339CFF · background #FFFFFF · foreground #1A1C1F
+ * Everything else is a neutral scale derived to match the reference
+ * screenshots. Dark values are derived, not from the Official App — its dark
+ * tokens have not been observed (ADR-0019 records this gap).
+ */
+:root {
+  --background: #ffffff;
+  --foreground: #1a1c1f;
+
+  --card: #ffffff;
+  --card-foreground: #1a1c1f;
+
+  --popover: #ffffff;
+  --popover-foreground: #1a1c1f;
+
+  /* The Official App uses its accent for links, focus and selected states
+     rather than large filled buttons (its send button is near-black), so
+     `--primary-foreground` is dark: white on #339CFF is only ~2.6:1. */
+  --primary: #339cff;
+  --primary-foreground: #08121c;
+
+  --secondary: #f2f2f1;
+  --secondary-foreground: #1a1c1f;
+
+  --muted: #f4f4f3;
+  --muted-foreground: #83888f;
+
+  --accent: #f0f0ef;
+  --accent-foreground: #1a1c1f;
+
+  --destructive: #d64545;
+  --destructive-foreground: #ffffff;
+
+  --border: #e7e7e5;
+  --input: #e2e2e0;
+  --ring: #339cff;
+
+  --sidebar: #f9f9f8;
+  --sidebar-foreground: #1a1c1f;
+  --sidebar-accent: #ececeb;
+  --sidebar-accent-foreground: #1a1c1f;
+  --sidebar-border: #e7e7e5;
+
+  --radius: 0.75rem;
+}
+
+.dark {
+  --background: #1a1c1f;
+  --foreground: #ecedee;
+
+  --card: #1f2225;
+  --card-foreground: #ecedee;
+
+  --popover: #212427;
+  --popover-foreground: #ecedee;
+
+  --primary: #339cff;
+  --primary-foreground: #08121c;
+
+  --secondary: #26292d;
+  --secondary-foreground: #ecedee;
+
+  --muted: #24272b;
+  --muted-foreground: #9ba1a8;
+
+  --accent: #2a2e33;
+  --accent-foreground: #ecedee;
+
+  --destructive: #e06666;
+  --destructive-foreground: #1a1c1f;
+
+  --border: #2b2f34;
+  --input: #33383d;
+  --ring: #339cff;
+
+  --sidebar: #141619;
+  --sidebar-foreground: #ecedee;
+  --sidebar-accent: #24272b;
+  --sidebar-accent-foreground: #ecedee;
+  --sidebar-border: #24272b;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+@theme {
+  /* ADR-0019: The Official App ships a proprietary "Codex" face; a neutral
+     system stack stands in. Kept out of the `@theme inline` block above:
+     inline values get substituted literally into the generated utilities, so
+     no live --font-sans custom property would exist for useTheme to override.
+     As a plain `@theme` block the variable is emitted and utilities reference
+     var(--font-sans), letting the runtime font choice take effect (ADR-0009). */
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    /* Desktop chrome, not a document: the shell owns its own scrolling. */
+    overflow: hidden;
+  }
+
+  /* Slim, unobtrusive scrollbars — the default GTK/WebKit ones are heavy
+     enough to read as a visual defect in a desktop app. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background-color: var(--border);
+    border: 3px solid transparent;
+    border-radius: 9999px;
+    background-clip: content-box;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: var(--muted-foreground);
+  }
+}
+
+@layer components {
+  /* Open/close transition for Radix-driven surfaces (popover, tooltip).
+     Hand-written because shadcn's stock `animate-in`/`zoom-in-95` utilities
+     come from the `tailwindcss-animate` plugin, which isn't a dependency
+     here — this keeps the motion real instead of leaving dead class names. */
+  .popover-surface {
+    transform-origin: var(--radix-popover-content-transform-origin, center);
+    animation: popover-in 120ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .popover-surface[data-state="closed"] {
+    animation: popover-out 80ms ease-in forwards;
+  }
+
+  @keyframes popover-in {
+    from {
+      opacity: 0;
+      transform: scale(0.96);
+    }
+  }
+
+  @keyframes popover-out {
+    to {
+      opacity: 0;
+      transform: scale(0.98);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .popover-surface,
+    .popover-surface[data-state="closed"] {
+      animation: none;
+    }
+  }
+}
+
+/* react-colorful injects its own <style> at mount as unlayered author CSS.
+   Cascade layers are compared before specificity, so rules in @layer
+   components would always lose to that unlayered stylesheet. Kept unlayered,
+   these win on both layer membership and the extra .popover-surface
+   specificity. */
+.popover-surface .react-colorful {
+  width: 100%;
+}
+
+.popover-surface .react-colorful__saturation {
+  border-radius: calc(var(--radius) - 2px);
+}
+
+.popover-surface .react-colorful__last-control {
+  border-radius: var(--radius);
+}

@@ -7,6 +7,7 @@ use codex_protocol::protocol::GitInfo;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadMemoryMode;
+use codex_protocol::protocol::VcsKind;
 use codex_rollout::RolloutItem;
 use codex_rollout::append_rollout_item_to_path;
 use codex_rollout::append_thread_name;
@@ -193,6 +194,7 @@ pub(super) async fn update_thread_metadata(
                 metadata.git_sha,
                 metadata.git_branch,
                 metadata.git_origin_url,
+                metadata.git_vcs,
             );
             Some((
                 resolve_git_info_patch(existing_git_info, git_info),
@@ -201,18 +203,19 @@ pub(super) async fn update_thread_metadata(
         }
         None => None,
     };
-    if let Some(((sha, branch, origin_url), memory_mode)) = resolved_git_info.as_ref() {
+    if let Some(((sha, branch, origin_url, vcs), memory_mode)) = resolved_git_info.as_ref() {
         apply_thread_git_info_to_rollout(
             resolved_rollout.path.as_path(),
             thread_id,
             sha,
             branch,
             origin_url,
+            vcs.as_deref(),
             memory_mode.as_deref(),
         )
         .await?;
         refresh_resolved_rollout_path(&mut resolved_rollout).await;
-        apply_thread_git_info(store, thread_id, sha, branch, origin_url).await?;
+        apply_thread_git_info(store, thread_id, sha, branch, origin_url, vcs).await?;
     }
 
     let mut thread = match read_thread::read_thread(
@@ -236,8 +239,8 @@ pub(super) async fn update_thread_metadata(
             .await?
         }
     };
-    if let Some(((sha, branch, origin_url), _memory_mode)) = resolved_git_info {
-        thread.git_info = git_info_from_parts(sha, branch, origin_url);
+    if let Some(((sha, branch, origin_url, vcs), _memory_mode)) = resolved_git_info {
+        thread.git_info = git_info_from_parts(sha, branch, origin_url, vcs);
     }
     Ok(thread)
 }
@@ -379,11 +382,14 @@ async fn apply_metadata_update(
                     metadata.git_sha.clone(),
                     metadata.git_branch.clone(),
                     metadata.git_origin_url.clone(),
+                    metadata.git_vcs.clone(),
                 );
-                let (sha, branch, origin_url) = resolve_git_info_patch(existing_git_info, git_info);
+                let (sha, branch, origin_url, vcs) =
+                    resolve_git_info_patch(existing_git_info, git_info);
                 metadata.git_sha = sha;
                 metadata.git_branch = branch;
                 metadata.git_origin_url = origin_url;
+                metadata.git_vcs = vcs;
             }
             state_db
                 .upsert_thread(&metadata)
@@ -610,6 +616,7 @@ async fn apply_thread_git_info_patch(
                 .origin_url
                 .as_ref()
                 .map(|origin_url| origin_url.as_deref()),
+            git_info.vcs.as_ref().map(|vcs| vcs.map(vcs_column_str)),
         )
         .await
         .map_err(|err| ThreadStoreError::Internal {
@@ -630,6 +637,7 @@ async fn apply_thread_git_info(
     sha: &Option<String>,
     branch: &Option<String>,
     origin_url: &Option<String>,
+    vcs: &Option<String>,
 ) -> ThreadStoreResult<()> {
     let Some(state_db) = store.state_db().await else {
         return Err(ThreadStoreError::Internal {
@@ -642,6 +650,7 @@ async fn apply_thread_git_info(
             Some(sha.as_deref()),
             Some(branch.as_deref()),
             Some(origin_url.as_deref()),
+            Some(vcs.as_deref()),
         )
         .await
         .map_err(|err| ThreadStoreError::Internal {
@@ -659,19 +668,45 @@ async fn apply_thread_git_info(
 fn resolve_git_info_patch(
     existing: Option<GitInfo>,
     git_info: GitInfoPatch,
-) -> (Option<String>, Option<String>, Option<String>) {
-    let (existing_sha, existing_branch, existing_origin_url) = match existing {
+) -> (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+) {
+    let (existing_sha, existing_branch, existing_origin_url, existing_vcs) = match existing {
         Some(info) => (
             info.commit_hash.map(|sha| sha.0),
             info.branch,
             info.repository_url,
+            vcs_to_column(info.vcs),
         ),
-        None => (None, None, None),
+        None => (None, None, None, None),
     };
     let sha = git_info.sha.unwrap_or(existing_sha);
     let branch = git_info.branch.unwrap_or(existing_branch);
     let origin_url = git_info.origin_url.unwrap_or(existing_origin_url);
-    (sha, branch, origin_url)
+    let vcs = git_info
+        .vcs
+        .map(|value| value.and_then(vcs_to_column))
+        .unwrap_or(existing_vcs);
+    (sha, branch, origin_url, vcs)
+}
+
+/// The static spelling of a discriminator, for binding into SQL.
+fn vcs_column_str(vcs: VcsKind) -> &'static str {
+    match vcs {
+        VcsKind::Git => "git",
+        VcsKind::Subversion => "subversion",
+    }
+}
+
+/// Stores the discriminator as the same string the rollout file uses, so the
+/// column and the file cannot drift into two spellings of one value.
+fn vcs_to_column(vcs: VcsKind) -> Option<String> {
+    serde_json::to_value(vcs)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_string))
 }
 
 async fn apply_thread_git_info_to_rollout(
@@ -680,6 +715,7 @@ async fn apply_thread_git_info_to_rollout(
     sha: &Option<String>,
     branch: &Option<String>,
     origin_url: &Option<String>,
+    vcs: Option<&str>,
     memory_mode: Option<&str>,
 ) -> ThreadStoreResult<()> {
     let mut session_meta =
@@ -698,6 +734,11 @@ async fn apply_thread_git_info_to_rollout(
     }
 
     session_meta.git = Some(GitInfo {
+        vcs: vcs
+            .and_then(|value| {
+                serde_json::from_value(serde_json::Value::String(value.to_string())).ok()
+            })
+            .unwrap_or_default(),
         commit_hash: sha.as_deref().map(codex_git_utils::GitSha::new),
         branch: branch.clone(),
         repository_url: origin_url.clone(),
@@ -1336,6 +1377,7 @@ mod tests {
                         sha: Some(Some("abc123".to_string())),
                         branch: Some(Some("main".to_string())),
                         origin_url: Some(Some("https://github.com/openai/codex".to_string())),
+                        vcs: None,
                     }),
                     ..Default::default()
                 },
@@ -1437,6 +1479,7 @@ mod tests {
                         sha: Some(Some("abc123".to_string())),
                         branch: Some(Some("main".to_string())),
                         origin_url: Some(Some("https://github.com/openai/codex".to_string())),
+                        vcs: None,
                     }),
                     ..Default::default()
                 },
@@ -1497,6 +1540,7 @@ mod tests {
                         sha: Some(Some("abc123".to_string())),
                         branch: Some(Some("main".to_string())),
                         origin_url: Some(Some("https://github.com/openai/codex".to_string())),
+                        vcs: None,
                     }),
                     ..Default::default()
                 },
@@ -1513,6 +1557,7 @@ mod tests {
                         sha: Some(None),
                         branch: Some(None),
                         origin_url: Some(None),
+                        vcs: None,
                     }),
                     ..Default::default()
                 },

@@ -36,6 +36,7 @@ members = [
     "connectors",
     "config",
     "context-fragments",
+    "../codex-desktop",
     "shell-command",
     "shell-escalation",
     "skills",
@@ -94,6 +95,7 @@ members = [
     "stdio-to-uds",
     "otel",
     "tui",
+    "vcs-utils",
     "tools",
     "v8-poc",
     "websocket-client",
@@ -209,6 +211,7 @@ codex-install-context = { path = "install-context" }
 codex-file-search = { path = "file-search" }
 codex-file-watcher = { path = "file-watcher" }
 codex-git-utils = { path = "git-utils" }
+codex-vcs-utils = { path = "vcs-utils" }
 codex-hooks = { path = "hooks" }
 codex-history = { path = "history" }
 codex-keyring-store = { path = "keyring-store" }

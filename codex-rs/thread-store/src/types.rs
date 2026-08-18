@@ -20,6 +20,7 @@ use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadMemoryMode as MemoryMode;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TokenUsage;
+use codex_protocol::protocol::VcsKind;
 use codex_rollout::RolloutItem;
 use serde::Deserialize;
 use serde::Deserializer;
@@ -641,6 +642,18 @@ pub struct GitInfoPatch {
         with = "optional_option"
     )]
     pub origin_url: ClearableField<String>,
+    /// Replacement version control system, clear request, or no-op.
+    ///
+    /// Carried through the patch so the discriminator survives the round trip
+    /// to the state database. Without it a Subversion thread would read back as
+    /// git, since the remaining three fields alone cannot say which system
+    /// wrote them.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "optional_option"
+    )]
+    pub vcs: ClearableField<VcsKind>,
 }
 
 impl GitInfoPatch {
@@ -657,6 +670,9 @@ impl GitInfoPatch {
         }
         if next.origin_url.is_some() {
             self.origin_url = next.origin_url;
+        }
+        if next.vcs.is_some() {
+            self.vcs = next.vcs;
         }
     }
 }
@@ -951,6 +967,7 @@ mod tests {
                 sha: None,
                 branch: Some(Some("main".to_string())),
                 origin_url: Some(None),
+                vcs: None,
             }),
             ..Default::default()
         };
@@ -972,6 +989,7 @@ mod tests {
                 sha: None,
                 branch: Some(Some("main".to_string())),
                 origin_url: Some(None),
+                vcs: None,
             })
         );
     }
@@ -1004,6 +1022,7 @@ mod tests {
                 sha: Some(Some("abc123".to_string())),
                 branch: Some(Some("main".to_string())),
                 origin_url: None,
+                vcs: None,
             }),
             ..Default::default()
         };
@@ -1016,6 +1035,7 @@ mod tests {
                 sha: None,
                 branch: Some(Some("feature".to_string())),
                 origin_url: Some(None),
+                vcs: None,
             }),
             ..Default::default()
         });
@@ -1029,6 +1049,7 @@ mod tests {
                 sha: Some(Some("abc123".to_string())),
                 branch: Some(Some("feature".to_string())),
                 origin_url: Some(None),
+                vcs: None,
             })
         );
     }

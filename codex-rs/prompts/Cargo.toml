@@ -16,6 +16,7 @@ workspace = true
 anyhow = { workspace = true }
 codex-context-fragments = { workspace = true }
 codex-git-utils = { workspace = true }
+codex-vcs-utils = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
@@ -23,3 +24,4 @@ codex-utils-template = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
+tempfile = { workspace = true }

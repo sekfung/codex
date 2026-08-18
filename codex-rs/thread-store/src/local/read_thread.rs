@@ -163,6 +163,7 @@ pub(super) async fn read_thread_by_rollout_path(
                 metadata.git_sha.or(fallback_sha),
                 metadata.git_branch.or(fallback_branch),
                 metadata.git_origin_url.or(fallback_origin_url),
+                metadata.git_vcs,
             );
         }
     }
@@ -392,6 +393,7 @@ pub(super) fn stored_thread_from_state_metadata(
             metadata.git_sha,
             metadata.git_branch,
             metadata.git_origin_url,
+            metadata.git_vcs,
         ),
         approval_mode: parse_or_default(&metadata.approval_mode, AskForApproval::OnRequest),
         permission_profile,

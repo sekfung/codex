@@ -1312,6 +1312,7 @@ fn review_target_to_api(target: ReviewTarget) -> ApiReviewTarget {
         ReviewTarget::UncommittedChanges => ApiReviewTarget::UncommittedChanges,
         ReviewTarget::BaseBranch { branch } => ApiReviewTarget::BaseBranch { branch },
         ReviewTarget::Commit { sha, title } => ApiReviewTarget::Commit { sha, title },
+        ReviewTarget::Revision { revision, title } => ApiReviewTarget::Revision { revision, title },
         ReviewTarget::Custom { instructions } => ApiReviewTarget::Custom { instructions },
     }
 }

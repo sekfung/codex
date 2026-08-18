@@ -210,7 +210,8 @@ SELECT
     threads.section_entered_at_ms,
     threads.git_sha,
     threads.git_branch,
-    threads.git_origin_url
+    threads.git_origin_url,
+    threads.git_vcs
 FROM threads
             "#,
         );
@@ -598,7 +599,8 @@ SELECT
     threads.section_entered_at_ms,
     threads.git_sha,
     threads.git_branch,
-    threads.git_origin_url
+    threads.git_origin_url,
+    threads.git_vcs
 FROM threads
 WHERE threads.id = ? AND threads.memory_mode = 'enabled'
             "#,

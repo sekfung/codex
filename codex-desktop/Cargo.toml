@@ -1,0 +1,57 @@
+[package]
+name = "codex-desktop"
+# Cargo can't auto-discover the workspace root by walking up parent
+# directories here, since this crate is a sibling of `codex-rs/`, not nested
+# under it (ADR-0011) — point at it explicitly.
+workspace = "../codex-rs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "codex-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+anyhow = { workspace = true }
+codex-app-server-client = { workspace = true }
+codex-app-server-protocol = { workspace = true }
+codex-arg0 = { workspace = true }
+codex-config = { workspace = true }
+codex-core = { workspace = true }
+codex-exec-server = { workspace = true }
+# The engine's own feature table. Used to read a flag's `default_enabled` when
+# building a config edit, so the "clear vs. write false" rule matches the TUI
+# instead of trusting a value round-tripped through the frontend.
+codex-features = { workspace = true }
+codex-utils-approval-presets = { workspace = true }
+codex-feedback = { workspace = true }
+# Owns the fsmonitor probe policy shared with the TUI's `/diff`; command
+# execution stays per-surface (see `src/git_diff.rs`).
+codex-git-utils = { workspace = true }
+codex-vcs-utils = { workspace = true }
+codex-protocol = { workspace = true }
+codex-utils-absolute-path = { workspace = true }
+codex-utils-home-dir = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+# `thread/queue/add` requires a client message id; v7 matches what the queue
+# extension mints server-side (`ext/queue/Cargo.toml`).
+uuid = { workspace = true, features = ["v7"] }
+tauri-plugin-updater = "2.10.1"
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }

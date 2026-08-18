@@ -1,0 +1,374 @@
+//! Actor that owns the in-process app-server client for its whole lifetime.
+//!
+//! `InProcessAppServerClient::next_event` needs `&mut self`, while
+//! `request`/`resolve_server_request`/`reject_server_request` only need
+//! `&self` — but there's no way to hand out `&self` access to Tauri commands
+//! once the client has been moved into a task that owns it exclusively. This
+//! actor sidesteps that by owning the client in one task and accepting work
+//! over a channel, rather than trying to share the client itself.
+//!
+//! One real limitation, left as-is for this increment: jobs are processed one
+//! at a time inside the same `select!` loop that drains server events, so a
+//! slow request delays the next event delivery. Every request this bridge
+//! makes today is a fast round-trip (list/start/resume/fork/approve), so this
+//! hasn't been a problem in practice, but a way out if it ever is: move each
+//! `client.request(..)` call onto its own detached task via `Arc<..>` +
+//! `tokio::sync::Mutex`, or give the client a cheap `Clone`.
+
+use serde::de::DeserializeOwned;
+use std::sync::atomic::AtomicI64;
+use std::sync::atomic::Ordering;
+
+use codex_app_server_client::InProcessAppServerClient;
+use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::RequestId;
+use serde_json::Value as JsonValue;
+use tauri::AppHandle;
+use tauri::Emitter;
+use tokio::sync::mpsc;
+use tokio::sync::oneshot;
+
+/// Event name emitted to the frontend for every server-initiated
+/// notification or request. Payload shape: `{ "method": string, "params":
+/// unknown }` — deliberately untyped on the Rust side (see module docs on
+/// why responses/events are forwarded as raw JSON in this increment).
+pub const APP_SERVER_EVENT: &str = "codex-desktop://app-server-event";
+
+enum BridgeJob {
+    Request {
+        request: ClientRequest,
+        respond_to: oneshot::Sender<Result<JsonValue, String>>,
+    },
+    RequestDetailed {
+        request: ClientRequest,
+        respond_to: oneshot::Sender<Result<JsonValue, RequestFailure>>,
+    },
+    ResolveServerRequest {
+        request_id: RequestId,
+        result: JsonValue,
+        respond_to: oneshot::Sender<Result<(), String>>,
+    },
+    RejectServerRequest {
+        request_id: RequestId,
+        message: String,
+        respond_to: oneshot::Sender<Result<(), String>>,
+    },
+}
+
+/// A failed request with its JSON-RPC error detail intact.
+///
+/// [`AppServerBridge::request`] flattens failures to a display string, which
+/// is all most callers need. Steering is the exception: the engine reports
+/// "this turn cannot be steered" through `error.data.codexErrorInfo` rather
+/// than the message, and a client that can't see it would silently drop the
+/// user's message instead of falling back to the queue.
+#[derive(Debug, Clone)]
+pub enum RequestFailure {
+    /// The server answered with a JSON-RPC error.
+    Server(JSONRPCErrorError),
+    /// The request never reached the server, or the bridge is gone.
+    Transport(String),
+}
+
+impl RequestFailure {
+    pub fn message(&self) -> String {
+        match self {
+            Self::Server(err) => format!("{} (code {})", err.message, err.code),
+            Self::Transport(err) => err.clone(),
+        }
+    }
+}
+
+impl From<RequestFailure> for String {
+    fn from(failure: RequestFailure) -> Self {
+        failure.message()
+    }
+}
+
+/// Handle stored in Tauri-managed state. Cheap to clone (just a channel
+/// sender), so every command invocation can hold its own copy.
+#[derive(Clone)]
+pub struct AppServerBridge {
+    job_tx: mpsc::UnboundedSender<BridgeJob>,
+    next_request_id: std::sync::Arc<AtomicI64>,
+}
+
+impl AppServerBridge {
+    pub fn next_request_id(&self) -> RequestId {
+        RequestId::Integer(self.next_request_id.fetch_add(1, Ordering::Relaxed))
+    }
+
+    /// Sends a request and returns the raw JSON-RPC result. Errors are
+    /// stringified (transport failures, JSON-RPC error responses, and "the
+    /// bridge task is gone" are all collapsed into one `Err(String)`) — good
+    /// enough for a v1 UI to show a toast; a future pass can thread through
+    /// richer error shapes if the UI needs to branch on them.
+    pub async fn request(&self, request: ClientRequest) -> Result<JsonValue, String> {
+        let (respond_to, response) = oneshot::channel();
+        self.job_tx
+            .send(BridgeJob::Request {
+                request,
+                respond_to,
+            })
+            .map_err(|_| "app-server bridge task is gone".to_string())?;
+        response
+            .await
+            .map_err(|_| "app-server bridge dropped the response channel".to_string())?
+    }
+
+    /// Sends a request and deserialises the successful response into `T`.
+    ///
+    /// Orthogonal to [`request_detailed`](Self::request_detailed): that one is
+    /// about preserving the *error*, this one is about typing the *success*
+    /// payload, so it composes with [`request`](Self::request) rather than
+    /// competing with it.
+    ///
+    /// The label in the decode error comes from the request itself rather than
+    /// from a caller-supplied string, so it cannot drift from the method
+    /// actually sent — which is the failure mode of the hand-written
+    /// `from_value(..).map_err(|e| format!("some/method: {e}"))` this replaces.
+    pub async fn request_as<T: DeserializeOwned>(
+        &self,
+        request: ClientRequest,
+    ) -> Result<T, String> {
+        let method = request.method_name();
+        let response = self.request(request).await?;
+        serde_json::from_value(response).map_err(|err| format!("{method}: {err}"))
+    }
+
+    /// Like [`request`](Self::request) but keeps the JSON-RPC error intact.
+    /// Use this only where the caller genuinely branches on error detail;
+    /// otherwise `request` keeps call sites simpler.
+    pub async fn request_detailed(
+        &self,
+        request: ClientRequest,
+    ) -> Result<JsonValue, RequestFailure> {
+        let (respond_to, response) = oneshot::channel();
+        self.job_tx
+            .send(BridgeJob::RequestDetailed {
+                request,
+                respond_to,
+            })
+            .map_err(|_| RequestFailure::Transport("app-server bridge task is gone".to_string()))?;
+        response.await.map_err(|_| {
+            RequestFailure::Transport("app-server bridge dropped the response channel".to_string())
+        })?
+    }
+
+    pub async fn resolve_server_request(
+        &self,
+        request_id: RequestId,
+        result: JsonValue,
+    ) -> Result<(), String> {
+        let (respond_to, response) = oneshot::channel();
+        self.job_tx
+            .send(BridgeJob::ResolveServerRequest {
+                request_id,
+                result,
+                respond_to,
+            })
+            .map_err(|_| "app-server bridge task is gone".to_string())?;
+        response
+            .await
+            .map_err(|_| "app-server bridge dropped the response channel".to_string())?
+    }
+
+    pub async fn reject_server_request(
+        &self,
+        request_id: RequestId,
+        message: String,
+    ) -> Result<(), String> {
+        let (respond_to, response) = oneshot::channel();
+        self.job_tx
+            .send(BridgeJob::RejectServerRequest {
+                request_id,
+                message,
+                respond_to,
+            })
+            .map_err(|_| "app-server bridge task is gone".to_string())?;
+        response
+            .await
+            .map_err(|_| "app-server bridge dropped the response channel".to_string())?
+    }
+}
+
+/// Moves `client` into a dedicated task and returns a cheap handle to it.
+/// The task runs for the rest of the process lifetime.
+pub fn spawn_bridge(client: InProcessAppServerClient, app_handle: AppHandle) -> AppServerBridge {
+    let (job_tx, job_rx) = mpsc::unbounded_channel::<BridgeJob>();
+    tauri::async_runtime::spawn(run_bridge_loop(client, job_rx, app_handle));
+    AppServerBridge {
+        job_tx,
+        next_request_id: std::sync::Arc::new(AtomicI64::new(1)),
+    }
+}
+
+async fn run_bridge_loop(
+    mut client: InProcessAppServerClient,
+    mut job_rx: mpsc::UnboundedReceiver<BridgeJob>,
+    app_handle: AppHandle,
+) {
+    loop {
+        tokio::select! {
+            job = job_rx.recv() => {
+                let Some(job) = job else {
+                    // All `AppServerBridge` handles dropped (app shutting down).
+                    let _ = client.shutdown().await;
+                    return;
+                };
+                handle_job(&client, job).await;
+            }
+            event = client.next_event() => {
+                let Some(event) = event else {
+                    tracing::warn!("app-server in-process event stream ended");
+                    return;
+                };
+                handle_event(&client, &app_handle, event.into()).await;
+            }
+        }
+    }
+}
+
+async fn handle_job(client: &InProcessAppServerClient, job: BridgeJob) {
+    match job {
+        BridgeJob::Request {
+            request,
+            respond_to,
+        } => {
+            let outcome = match client.request(request).await {
+                Ok(Ok(result)) => Ok(result),
+                Ok(Err(err)) => Err(format!("{} (code {})", err.message, err.code)),
+                Err(err) => Err(format!("transport error: {err}")),
+            };
+            let _ = respond_to.send(outcome);
+        }
+        BridgeJob::RequestDetailed {
+            request,
+            respond_to,
+        } => {
+            let outcome = match client.request(request).await {
+                Ok(Ok(result)) => Ok(result),
+                Ok(Err(err)) => Err(RequestFailure::Server(err)),
+                Err(err) => Err(RequestFailure::Transport(format!("transport error: {err}"))),
+            };
+            let _ = respond_to.send(outcome);
+        }
+        BridgeJob::ResolveServerRequest {
+            request_id,
+            result,
+            respond_to,
+        } => {
+            let outcome = client
+                .resolve_server_request(request_id, result)
+                .await
+                .map_err(|err| format!("failed to resolve approval: {err}"));
+            let _ = respond_to.send(outcome);
+        }
+        BridgeJob::RejectServerRequest {
+            request_id,
+            message,
+            respond_to,
+        } => {
+            let outcome = client
+                .reject_server_request(
+                    request_id,
+                    JSONRPCErrorError {
+                        code: -32000,
+                        message,
+                        data: None,
+                    },
+                )
+                .await
+                .map_err(|err| format!("failed to reject approval: {err}"));
+            let _ = respond_to.send(outcome);
+        }
+    }
+}
+
+/// Handles one server-initiated event.
+///
+/// Server *requests* are routed first (see [`crate::server_requests`]): the
+/// engine blocks on them, so one that reaches neither a responder here nor
+/// the frontend is a deadlock. Routing happens in Rust, before the webview is
+/// involved at all, so a slow, reloading or wedged frontend cannot be what
+/// stands between the engine and a response.
+///
+/// A request is answered here *or* emitted, never both — the routing enum's
+/// variants are mutually exclusive, so there is no path on which two
+/// responses are produced for one id.
+async fn handle_event(
+    client: &InProcessAppServerClient,
+    app_handle: &AppHandle,
+    event: codex_app_server_client::AppServerEvent,
+) {
+    use crate::server_requests::ServerRequestRouting;
+    use codex_app_server_client::AppServerEvent;
+
+    if let AppServerEvent::ServerRequest(request) = &event {
+        let request_id = request.id().clone();
+        match crate::server_requests::route(request) {
+            ServerRequestRouting::Frontend => {}
+            ServerRequestRouting::AnswerHere(result) => {
+                if let Err(err) = client.resolve_server_request(request_id, result).await {
+                    tracing::error!(%err, "failed to answer server request in-process");
+                }
+                return;
+            }
+            ServerRequestRouting::Reject(error) => {
+                tracing::warn!(
+                    method = %crate::server_requests::method_name(request),
+                    "rejecting unserviceable server request"
+                );
+                if let Err(err) = client.reject_server_request(request_id, error).await {
+                    tracing::error!(%err, "failed to reject unserviceable server request");
+                }
+                return;
+            }
+        }
+    }
+
+    emit_event(app_handle, event);
+}
+
+/// Forwards a server-initiated event to the frontend. Notifications and
+/// requests both become `{ method, params }` payloads (a `ServerRequest`
+/// additionally needs `request_id` echoed back on resolve/reject, so it's
+/// included as `params.requestId` — see the TODO below).
+fn emit_event(app_handle: &AppHandle, event: codex_app_server_client::AppServerEvent) {
+    use codex_app_server_client::AppServerEvent;
+
+    let payload = match event {
+        AppServerEvent::ServerNotification(notification) => serde_json::json!({
+            "kind": "notification",
+            "notification": *notification,
+        }),
+        AppServerEvent::ServerRequest(request) => {
+            // `ServerRequest::id()` gives the `RequestId` directly; the
+            // serialized `request` payload also carries it as `"id"`
+            // (`#[serde(tag = "method")]` on the enum, `#[serde(rename =
+            // "id")]` on the field — see `server_request_definitions!` in
+            // app-server-protocol) but pulling it out explicitly here saves
+            // the frontend from needing to know that shape just to echo the
+            // id back on resolve/reject.
+            let request_id = request.id().clone();
+            serde_json::json!({
+                "kind": "request",
+                "requestId": request_id,
+                "request": *request,
+            })
+        }
+        AppServerEvent::Lagged { skipped } => serde_json::json!({
+            "kind": "lagged",
+            "skipped": skipped,
+        }),
+        AppServerEvent::Disconnected { message } => serde_json::json!({
+            "kind": "disconnected",
+            "message": message,
+        }),
+    };
+
+    if let Err(err) = app_handle.emit(APP_SERVER_EVENT, payload) {
+        tracing::error!(%err, "failed to emit app-server event to frontend");
+    }
+}

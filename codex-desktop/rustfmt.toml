@@ -1,0 +1,9 @@
+# Mirrors `codex-rs/rustfmt.toml`. It cannot be inherited: rustfmt discovers
+# its config by walking up from each file's own directory, and this crate sits
+# beside `codex-rs/` rather than inside it (ADR-0011), so the workspace's
+# config is never found. Without this copy the crate silently formats under
+# rustfmt defaults while the rest of the repo does not.
+edition = "2024"
+# The warnings caused by this setting can be ignored.
+# See https://github.com/openai/openai/pull/298039 for details.
+imports_granularity = "Item"
