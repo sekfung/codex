@@ -1,15 +1,16 @@
 # CNB build pipeline for Codex Desktop (Tauri 2).
 #
-# Multi-platform builds:
-#   - Linux  : official CNB Linux runner (containerized, codex-desktop/.cnb/Dockerfile)
-#   - Windows: self-hosted Windows runner  (runner.namespace: group + tags: [win])
-#   - macOS  : self-hosted macOS runner    (runner.namespace: group + tags: [mac])
+# Current status: only the Linux build runs on the official CNB Linux runner
+# (containerized, codex-desktop/.cnb/Dockerfile). The Windows (tags: [win]) and
+# macOS (tags: [mac]) self-hosted pipelines are intentionally NOT included yet
+# because those build nodes are not connected. Add them back once the nodes are
+# provisioned.
 #
-# The Windows and macOS pipelines run on self-hosted build nodes (no Docker
-# build env), so they execute on the host toolchain directly. Those nodes must
-# pre-install: Rust 1.95.0 (from codex-rs/rust-toolchain.toml), Node.js >=22 and
-# pnpm 10.33 (from root package.json), plus the platform bundler toolchain
-# (Windows: MSVC + NSIS/WiX; macOS: Xcode Command Line Tools).
+# When enabled, the Windows/macOS pipelines run on self-hosted build nodes (no
+# Docker build env) on the host toolchain directly. Those nodes must pre-install:
+# Rust 1.95.0 (from codex-rs/rust-toolchain.toml), Node.js >=22 and pnpm 10.33
+# (from root package.json), plus the platform bundler toolchain (Windows: MSVC +
+# NSIS/WiX; macOS: Xcode Command Line Tools).
 #
 # Modeled on the repo's GitHub Actions workflows (rust-ci / rust-ci-full / sdk):
 #   - cargo fmt --check, cargo clippy -- -D warnings, cargo test
@@ -53,32 +54,6 @@
           script: |
             cd codex-rs
             cargo test -p codex-desktop
-        - name: tauri-build
-          script: |
-            cd codex-desktop
-            cargo tauri build
-
-    # ---- Windows desktop bundle (self-hosted Windows runner) ----
-    - name: codex-desktop-windows
-      runner:
-        namespace: group
-        tags:
-          - win
-      stages:
-        - *x-frontend-build
-        - name: tauri-build
-          script: |
-            cd codex-desktop
-            cargo tauri build
-
-    # ---- macOS desktop bundle (self-hosted macOS runner) ----
-    - name: codex-desktop-macos
-      runner:
-        namespace: group
-        tags:
-          - mac
-      stages:
-        - *x-frontend-build
         - name: tauri-build
           script: |
             cd codex-desktop
