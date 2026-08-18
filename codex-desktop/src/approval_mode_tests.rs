@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 use super::*;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;

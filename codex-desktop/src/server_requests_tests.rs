@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 use super::*;
 use codex_app_server_protocol::DynamicToolCallParams;
 use codex_app_server_protocol::RequestId;

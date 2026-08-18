@@ -51,7 +51,7 @@ fn unconfigured_reason(app: &AppHandle) -> Option<String> {
     let endpoints_empty = config
         .get("endpoints")
         .and_then(|value| value.as_array())
-        .is_none_or(|endpoints| endpoints.is_empty());
+        .is_none_or(Vec::is_empty);
     let pubkey_empty = config
         .get("pubkey")
         .and_then(|value| value.as_str())
@@ -77,7 +77,7 @@ pub async fn check_for_update(app: AppHandle) -> CmdResult<UpdateStatus> {
         Some(update) => Ok(UpdateStatus::Available {
             current_version: update.current_version.clone(),
             version: update.version.clone(),
-            notes: update.body.clone(),
+            notes: update.body,
         }),
         None => Ok(UpdateStatus::UpToDate { current_version }),
     }

@@ -220,7 +220,7 @@ async fn startup_failure(
 #[path = "main_tests.rs"]
 mod tests;
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
     // Tauri lazily creates its own default-config async runtime the first
@@ -238,16 +238,14 @@ fn main() {
     let async_runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_stack_size(TOKIO_WORKER_STACK_SIZE_BYTES)
-        .build()
-        .expect("failed to build tokio runtime");
+        .build()?;
     tauri::async_runtime::set(async_runtime.handle().clone());
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
-            let project_store = projects::ProjectStore::load(app.handle())
-                .expect("failed to load Project list from app-local storage");
+            let project_store = projects::ProjectStore::load(app.handle())?;
             app.manage(project_store);
             // Session-scoped latch for the paginated-history negotiation, so a
             // server that refuses pagination is asked once rather than on every
@@ -361,6 +359,7 @@ fn main() {
             integrations::detect_external_agent_config,
             integrations::import_external_agent_config,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Codex Desktop");
+        .run(tauri::generate_context!())?;
+
+    Ok(())
 }

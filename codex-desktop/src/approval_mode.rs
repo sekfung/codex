@@ -94,7 +94,7 @@ impl ApprovalMode {
 
         Ok(ResolvedApprovalMode {
             approval_policy: preset.approval.into(),
-            permission_profile_id: preset.active_permission_profile.id.clone(),
+            permission_profile_id: preset.active_permission_profile.id,
             approvals_reviewer: self.reviewer(),
         })
     }

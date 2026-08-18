@@ -320,6 +320,11 @@ fn active_turn_not_steerable(error: &JSONRPCErrorError) -> bool {
 /// `active_turn_id` is the turn the frontend believes is running, or `None`
 /// when it believes the thread is idle. Every branch below exists because the
 /// belief can be wrong by the time the request lands.
+///
+/// The 8 parameters are the Tauri command's wire arguments from the
+/// frontend; grouping them into a struct would change the command's JSON
+/// shape, so the argument count is kept explicit.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn submit_turn(
     bridge: State<'_, AppServerBridge>,
