@@ -2171,6 +2171,7 @@ dependencies = [
  "codex-git-utils",
  "codex-goal-extension",
  "codex-guardian",
+ "codex-guardian-v2",
  "codex-home",
  "codex-hooks",
  "codex-http-client",
@@ -3494,7 +3495,10 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "codex-api",
+ "codex-core",
  "codex-extension-api",
+ "codex-features",
+ "codex-history",
  "codex-http-client",
  "codex-login",
  "codex-model-provider",
