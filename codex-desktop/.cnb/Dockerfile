@@ -26,6 +26,9 @@ RUN apt-get update \
     javascriptcoregtk-4.1-dev \
     libappindicator3-dev \
     patchelf \
+    # Linux bundle tooling (deb / rpm / AppImage) for `cargo tauri build`
+    rpm \
+    libfuse2t64 \
     # Node.js toolchain for the ui/ frontend
     nodejs \
     npm \

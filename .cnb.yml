@@ -1,15 +1,32 @@
 # CNB build pipeline for Codex Desktop (Tauri 2).
+#
+# Multi-platform builds:
+#   - Linux  : official CNB Linux runner (containerized, codex-desktop/.cnb/Dockerfile)
+#   - Windows: self-hosted Windows runner  (runner.namespace: group + tags: [win])
+#   - macOS  : self-hosted macOS runner    (runner.namespace: group + tags: [mac])
+#
+# The Windows and macOS pipelines run on self-hosted build nodes (no Docker
+# build env), so they execute on the host toolchain directly. Those nodes must
+# pre-install: Rust 1.95.0 (from codex-rs/rust-toolchain.toml), Node.js >=22 and
+# pnpm 10.33 (from root package.json), plus the platform bundler toolchain
+# (Windows: MSVC + NSIS/WiX; macOS: Xcode Command Line Tools).
+#
 # Modeled on the repo's GitHub Actions workflows (rust-ci / rust-ci-full / sdk):
-#   - Rust toolchain 1.95.0 (clippy, rustfmt, rust-src) from codex-rs/rust-toolchain.toml
-#   - Node.js >=22 / pnpm 10.33 from root package.json
 #   - cargo fmt --check, cargo clippy -- -D warnings, cargo test
 #   - pnpm install --frozen-lockfile + pnpm build for the React/Vite ui/
-# The build image (codex-desktop/.cnb/Dockerfile) pre-installs the OS packages
-# required by Tauri 2 on Linux so they are not re-installed per run.
+
+# Shared frontend build step (works in bash on Linux/macOS and PowerShell on Windows)
+.x-frontend-build: &x-frontend-build
+  name: frontend-build
+  script: |
+    cd codex-desktop/ui
+    pnpm install --frozen-lockfile
+    pnpm build
 
 "feat/codex-desktop":
   push:
-    - name: codex-desktop-ci
+    # ---- Linux desktop bundle (official CNB Linux runner) ----
+    - name: codex-desktop-linux
       runner:
         cpus: 8
       docker:
@@ -27,11 +44,7 @@
           script: |
             cd codex-rs
             cargo fmt -- --config imports_granularity=Item --check
-        - name: frontend-build
-          script: |
-            cd codex-desktop/ui
-            pnpm install --frozen-lockfile
-            pnpm build
+        - *x-frontend-build
         - name: clippy
           script: |
             cd codex-rs
@@ -43,8 +56,36 @@
         - name: tauri-build
           script: |
             cd codex-desktop
-            cargo tauri build --no-bundle
+            cargo tauri build
+
+    # ---- Windows desktop bundle (self-hosted Windows runner) ----
+    - name: codex-desktop-windows
+      runner:
+        namespace: group
+        tags:
+          - win
+      stages:
+        - *x-frontend-build
+        - name: tauri-build
+          script: |
+            cd codex-desktop
+            cargo tauri build
+
+    # ---- macOS desktop bundle (self-hosted macOS runner) ----
+    - name: codex-desktop-macos
+      runner:
+        namespace: group
+        tags:
+          - mac
+      stages:
+        - *x-frontend-build
+        - name: tauri-build
+          script: |
+            cd codex-desktop
+            cargo tauri build
+
   pull_request:
+    # ---- PR checks (official CNB Linux runner) ----
     - name: codex-desktop-pr
       runner:
         cpus: 8
@@ -63,11 +104,7 @@
           script: |
             cd codex-rs
             cargo fmt -- --config imports_granularity=Item --check
-        - name: frontend-build
-          script: |
-            cd codex-desktop/ui
-            pnpm install --frozen-lockfile
-            pnpm build
+        - *x-frontend-build
         - name: clippy
           script: |
             cd codex-rs
