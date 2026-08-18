@@ -1,0 +1,78 @@
+# CNB build pipeline for Codex Desktop (Tauri 2).
+# Modeled on the repo's GitHub Actions workflows (rust-ci / rust-ci-full / sdk):
+#   - Rust toolchain 1.95.0 (clippy, rustfmt, rust-src) from codex-rs/rust-toolchain.toml
+#   - Node.js >=22 / pnpm 10.33 from root package.json
+#   - cargo fmt --check, cargo clippy -- -D warnings, cargo test
+#   - pnpm install --frozen-lockfile + pnpm build for the React/Vite ui/
+# The build image (codex-desktop/.cnb/Dockerfile) pre-installs the OS packages
+# required by Tauri 2 on Linux so they are not re-installed per run.
+
+"feat/codex-desktop":
+  push:
+    - name: codex-desktop-ci
+      runner:
+        cpus: 8
+      docker:
+        build:
+          dockerfile: codex-desktop/.cnb/Dockerfile
+          by:
+            - codex-desktop/.cnb/Dockerfile
+            - codex-rs/rust-toolchain.toml
+            - package.json
+            - pnpm-lock.yaml
+      services:
+        - docker
+      stages:
+        - name: fmt-check
+          script: |
+            cd codex-rs
+            cargo fmt -- --config imports_granularity=Item --check
+        - name: frontend-build
+          script: |
+            cd codex-desktop/ui
+            pnpm install --frozen-lockfile
+            pnpm build
+        - name: clippy
+          script: |
+            cd codex-rs
+            cargo clippy -p codex-desktop --all-targets -- -D warnings
+        - name: test
+          script: |
+            cd codex-rs
+            cargo test -p codex-desktop
+        - name: tauri-build
+          script: |
+            cd codex-desktop
+            cargo tauri build --no-bundle
+  pull_request:
+    - name: codex-desktop-pr
+      runner:
+        cpus: 8
+      docker:
+        build:
+          dockerfile: codex-desktop/.cnb/Dockerfile
+          by:
+            - codex-desktop/.cnb/Dockerfile
+            - codex-rs/rust-toolchain.toml
+            - package.json
+            - pnpm-lock.yaml
+      services:
+        - docker
+      stages:
+        - name: fmt-check
+          script: |
+            cd codex-rs
+            cargo fmt -- --config imports_granularity=Item --check
+        - name: frontend-build
+          script: |
+            cd codex-desktop/ui
+            pnpm install --frozen-lockfile
+            pnpm build
+        - name: clippy
+          script: |
+            cd codex-rs
+            cargo clippy -p codex-desktop --all-targets -- -D warnings
+        - name: test
+          script: |
+            cd codex-rs
+            cargo test -p codex-desktop
