@@ -91,6 +91,7 @@ pub use crate::approvals::NetworkApprovalProtocol;
 pub use crate::approvals::NetworkPolicyAmendment;
 pub use crate::approvals::NetworkPolicyRuleAction;
 pub use crate::environment::EnvironmentConfig;
+pub use crate::environment::EnvironmentConfigState;
 pub use crate::legacy_events::HasLegacyEvent;
 pub use crate::permissions::FileSystemAccessMode;
 pub use crate::permissions::FileSystemPath;
@@ -146,6 +147,7 @@ pub struct TurnEnvironmentSelection {
     pub environment_id: String,
     pub cwd: PathUri,
     pub workspace_roots: Vec<PathUri>,
+    pub config: EnvironmentConfigState,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1512,6 +1514,7 @@ pub enum HookEventName {
 #[serde(rename_all = "snake_case")]
 pub enum HookHandlerType {
     Command,
+    McpTool,
     Prompt,
     Agent,
 }
@@ -1768,6 +1771,7 @@ pub enum CodexErrorInfo {
     UsageLimitExceeded,
     ServerOverloaded,
     CyberPolicy,
+    MisalignmentPolicyViolation,
     HttpConnectionFailed {
         http_status_code: Option<u16>,
     },
@@ -1806,6 +1810,7 @@ impl CodexErrorInfo {
             | Self::UsageLimitExceeded
             | Self::ServerOverloaded
             | Self::CyberPolicy
+            | Self::MisalignmentPolicyViolation
             | Self::HttpConnectionFailed { .. }
             | Self::ResponseStreamConnectionFailed { .. }
             | Self::InternalServerError

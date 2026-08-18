@@ -2171,6 +2171,7 @@ dependencies = [
  "codex-git-utils",
  "codex-goal-extension",
  "codex-guardian",
+ "codex-guardian-v2",
  "codex-home",
  "codex-hooks",
  "codex-http-client",
@@ -3494,7 +3495,10 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "codex-api",
+ "codex-core",
  "codex-extension-api",
+ "codex-features",
+ "codex-history",
  "codex-http-client",
  "codex-login",
  "codex-model-provider",
@@ -3565,6 +3569,7 @@ dependencies = [
  "codex-utils-rustls-provider",
  "futures",
  "http 1.4.0",
+ "native-tls",
  "opentelemetry",
  "opentelemetry_sdk",
  "pretty_assertions",
@@ -4540,7 +4545,6 @@ dependencies = [
  "codex-app-server-client",
  "codex-app-server-protocol",
  "codex-arg0",
- "codex-cli",
  "codex-cloud-config",
  "codex-config",
  "codex-connectors",
@@ -5261,6 +5265,7 @@ dependencies = [
  "codex-model-provider-info",
  "codex-models-manager",
  "codex-protocol",
+ "codex-thread-store",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
  "codex-utils-path-uri",
@@ -5379,7 +5384,7 @@ checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
 [[package]]
 name = "crossterm"
 version = "0.29.0"
-source = "git+https://github.com/openai-oss-forks/crossterm?rev=f69a4a0499f2fdc7d5d222df32373ffffe9ba3f5#f69a4a0499f2fdc7d5d222df32373ffffe9ba3f5"
+source = "git+https://github.com/openai-oss-forks/crossterm?rev=45fecb9508105988f42fe6ff0441783ed3717f92#45fecb9508105988f42fe6ff0441783ed3717f92"
 dependencies = [
  "bitflags 2.13.1",
  "crossterm_winapi",

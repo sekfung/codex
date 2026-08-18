@@ -47,6 +47,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RealtimeConversationVersion as RealtimeWsVersion;
 use codex_protocol::protocol::SandboxPolicy;
@@ -57,6 +58,7 @@ use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::user_input::UserInput;
+use codex_thread_store::ThreadStore;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use futures::future::BoxFuture;
@@ -118,6 +120,7 @@ pub fn local(cwd: AbsolutePathBuf) -> TurnEnvironmentSelection {
         environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
         cwd: PathUri::from_abs_path(&cwd),
         workspace_roots: vec![PathUri::from_abs_path(&cwd)],
+        config: EnvironmentConfigState::FromThread,
     }
 }
 
@@ -150,6 +153,7 @@ impl TestEnv {
                 environment_id: codex_exec_server::REMOTE_ENVIRONMENT_ID.to_string(),
                 cwd: PathUri::from_abs_path(&cwd),
                 workspace_roots: vec![PathUri::from_abs_path(&cwd)],
+                config: EnvironmentConfigState::FromThread,
             },
             None => local(cwd.clone()),
         };
@@ -218,6 +222,7 @@ pub async fn test_env() -> Result<TestEnv> {
                 environment_id: codex_exec_server::REMOTE_ENVIRONMENT_ID.to_string(),
                 cwd: cwd_uri.clone(),
                 workspace_roots: vec![cwd_uri.clone()],
+                config: EnvironmentConfigState::FromThread,
             };
             let cwd = if remote_env == TestEnvironment::WineExec {
                 // TODO(anp): Convert `Config::cwd` to `LegacyAppPathString` and remove this
@@ -667,7 +672,7 @@ impl TestCodexBuilder {
             Arc::clone(&self.extensions),
             user_instructions_provider,
             /*analytics_events_client*/ None,
-            thread_store,
+            Arc::clone(&thread_store),
             codex_core::local_agent_graph_store_from_state_db(state_db.as_ref()),
             installation_id,
             /*attestation_provider*/ None,
@@ -751,6 +756,7 @@ impl TestCodexBuilder {
             codex: new_conversation.thread,
             session_configured: new_conversation.session_configured,
             thread_manager,
+            thread_store,
             _test_env: test_env,
         })
     }
@@ -841,6 +847,7 @@ pub struct TestCodex {
     pub session_configured: SessionConfiguredEvent,
     pub config: Config,
     pub thread_manager: Arc<ThreadManager>,
+    pub thread_store: Arc<dyn ThreadStore>,
     _test_env: TestEnv,
 }
 

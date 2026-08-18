@@ -47,6 +47,7 @@ use crate::app_server_session::AppServerStartedThread;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
+use crate::chatwidget::ConnectorScopeGeneration;
 use crate::chatwidget::ThreadUsageOutcome;
 use crate::chatwidget::UserMessage;
 use crate::goal_files::GoalDraft;
@@ -262,6 +263,7 @@ pub(crate) enum AppEvent {
     SyncThreadGitBranch {
         thread_id: ThreadId,
         branch: String,
+        cwd: PathBuf,
     },
 
     /// Fetch a persistent cross-session message history entry by offset.
@@ -281,6 +283,12 @@ pub(crate) enum AppEvent {
     /// Start a new session, optionally assigning it a name.
     NewSession {
         name: Option<String>,
+    },
+
+    /// Change the working directory of the originating idle primary thread.
+    ChangeWorkingDirectory {
+        thread_id: ThreadId,
+        requested_cwd: PathBuf,
     },
 
     /// Result of the fresh startup thread that is attached after the input UI is live.
@@ -495,12 +503,15 @@ pub(crate) enum AppEvent {
 
     /// Result of prefetching connectors.
     ConnectorsLoaded {
+        thread_id: Option<ThreadId>,
+        cwd: PathBuf,
+        generation: ConnectorScopeGeneration,
         result: Result<ConnectorsSnapshot, String>,
         is_final: bool,
     },
 
     /// Result of computing a `/diff` command.
-    DiffResult(String),
+    DiffResult(PathBuf, String),
 
     /// Open the app link view in the bottom pane.
     OpenAppLink {
@@ -560,9 +571,10 @@ pub(crate) enum AppEvent {
         force_refetch: bool,
     },
 
-    /// Fetch app connector state from the app server after the widget accepts a refresh request.
+    /// Fetch apps only while the originating account, workspace, and thread remain current.
     FetchConnectorsList {
         force_refetch: bool,
+        generation: ConnectorScopeGeneration,
     },
 
     /// Fetch plugin marketplace state for the provided working directory.
@@ -743,6 +755,7 @@ pub(crate) enum AppEvent {
 
     /// Result of refreshing plugin mention bindings.
     PluginMentionsLoaded {
+        cwd: PathBuf,
         plugins: Option<Vec<PluginCapabilitySummary>>,
     },
 
@@ -773,6 +786,7 @@ pub(crate) enum AppEvent {
     /// command path because those callers expect the visible skill state to be current when their command
     /// completes.
     SkillsListLoaded {
+        cwd: PathBuf,
         result: Result<SkillsListResponse, String>,
     },
 

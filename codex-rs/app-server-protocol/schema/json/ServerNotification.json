@@ -606,6 +606,7 @@
             "usageLimitExceeded",
             "serverOverloaded",
             "cyberPolicy",
+            "misalignmentPolicyViolation",
             "internalServerError",
             "unauthorized",
             "badRequest",
@@ -2098,6 +2099,7 @@
     "HookHandlerType": {
       "enum": [
         "command",
+        "mcpTool",
         "prompt",
         "agent"
       ],
