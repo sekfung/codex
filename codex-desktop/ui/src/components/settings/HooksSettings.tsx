@@ -35,6 +35,13 @@ const TRUST_LABELS: Record<string, string> = {
   modified: "已修改",
 };
 
+const HANDLER_LABELS: Record<string, string> = {
+  command: "命令",
+  mcpTool: "MCP 工具",
+  prompt: "提示词",
+  agent: "智能体",
+};
+
 export function HooksSettings() {
   const [entries, setEntries] = useState<HooksListEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -121,13 +128,24 @@ function HookRow({ hook }: { hook: HookMetadata }) {
       label={EVENT_LABELS[hook.eventName] ?? hook.eventName}
       description={
         <span className="flex flex-col gap-1">
-          {hook.command && (
+          {hook.handlerType === "command" && hook.command && (
             <code className="block overflow-x-auto font-mono text-[11px]">{hook.command}</code>
           )}
+          {hook.handlerType === "mcpTool" && hook.server && hook.tool && (
+            <code className="block overflow-x-auto font-mono text-[11px]">
+              {hook.server} → {hook.tool}
+            </code>
+          )}
           <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span>{hook.handlerType}</span>
+            <span>{HANDLER_LABELS[hook.handlerType] ?? hook.handlerType}</span>
             <span>·</span>
-            <span>{hook.executionMode === "async" ? "异步" : "同步"}</span>
+            <span>
+              {hook.handlerType === "command"
+                ? hook.async === true
+                  ? "异步"
+                  : "同步"
+                : "同步"}
+            </span>
             {hook.matcher && (
               <>
                 <span>·</span>

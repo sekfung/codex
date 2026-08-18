@@ -358,7 +358,6 @@ fn main() {
             integrations::add_marketplace,
             integrations::remove_marketplace,
             integrations::upgrade_marketplace,
-            integrations::upload_feedback,
             integrations::detect_external_agent_config,
             integrations::import_external_agent_config,
         ])

@@ -41,7 +41,6 @@ import { ContextMeter } from "./ContextMeter";
 import { BackgroundTerminals } from "./BackgroundTerminals";
 import { GoalPanel } from "./GoalPanel";
 import { QueuePanel } from "./QueuePanel";
-import { FeedbackDialog } from "./FeedbackDialog";
 import { ReviewLauncher } from "./ReviewLauncher";
 import { DiffViewer } from "./DiffViewer";
 import { StatusPanel } from "./StatusPanel";
@@ -989,7 +988,6 @@ export function Composer({ threadId }: { threadId: string }) {
             <ReviewLauncher threadId={threadId} />
             <DiffViewer threadId={threadId} />
             <StatusPanel threadId={threadId} />
-            <FeedbackDialog threadId={threadId} />
 
             <BackgroundTerminals threadId={threadId} />
 

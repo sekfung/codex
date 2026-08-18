@@ -245,49 +245,6 @@ fn parse_cwds(
         .transpose()
 }
 
-// --- Feedback ---------------------------------------------------------------
-
-/// `feedback/upload`.
-///
-/// The parameters mirror what the TUI sends
-/// (`tui/src/app/background_requests.rs::feedback_upload_params`): a
-/// classification, optional free-text reason, the originating thread, and —
-/// only when the user opts in — logs.
-///
-/// `include_logs` is the consent bit and nothing else is inferred from it
-/// here. The TUI attaches the thread's rollout file as `extra_log_files` when
-/// logs are included; this client does **not**, because it has no rollout path
-/// of its own to offer and inventing one would be attaching a file the user
-/// was not shown. What the server itself collects under `include_logs` is the
-/// server's business, and the UI names it (see `FeedbackDialog`).
-///
-/// `classification` is passed through as the engine's own string values
-/// (`bad_result` / `good_result` / `bug` / `safety_check` / `other`, from
-/// `tui/src/bottom_pane/feedback_view.rs::feedback_classification`) rather
-/// than a vocabulary invented here.
-#[tauri::command]
-pub async fn upload_feedback(
-    bridge: State<'_, AppServerBridge>,
-    classification: String,
-    reason: Option<String>,
-    thread_id: Option<String>,
-    include_logs: bool,
-) -> CmdResult<JsonValue> {
-    bridge
-        .request(ClientRequest::FeedbackUpload {
-            request_id: bridge.next_request_id(),
-            params: codex_app_server_protocol::FeedbackUploadParams {
-                classification,
-                reason,
-                thread_id,
-                include_logs,
-                extra_log_files: None,
-                tags: None,
-            },
-        })
-        .await
-}
-
 // --- External agent config import (导入) ------------------------------------
 
 /// The migration sources the TUI probes, in its order

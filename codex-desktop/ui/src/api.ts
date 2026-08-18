@@ -391,19 +391,6 @@ export const listApps = () => invoke<AppsListResponse>("list_apps");
 export const mentionToken = (mention: ComposerMention) =>
   invoke<string>("mention_token", { mention });
 
-// -- Feedback (`feedback/upload`) --------------------------------------------
-
-/**
- * `classification` uses the engine's own values (`bad_result`, `good_result`,
- * `bug`, `safety_check`, `other`). `includeLogs` is the consent bit.
- */
-export const uploadFeedback = (
-  classification: string,
-  reason: string | null,
-  threadId: string | null,
-  includeLogs: boolean,
-) => invoke<OpaqueResult>("upload_feedback", { classification, reason, threadId, includeLogs });
-
 // -- External agent import (导入) --------------------------------------------
 
 export const detectExternalAgentConfig = (cwds: string[]) =>

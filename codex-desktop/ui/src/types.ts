@@ -803,13 +803,19 @@ export interface McpServerOauthLoginResponse {
 
 export type HookTrustStatus = "managed" | "untrusted" | "trusted" | "modified";
 
+// `HookHandlerMetadata` is `#[serde(flatten)]`-ed into `HookMetadata`, so the
+// handler-specific fields sit at top level, keyed by the `handlerType` tag:
+// command hooks add `command` + `async`, MCP tool hooks add `server` + `tool`,
+// and prompt/agent hooks add nothing.
 export interface HookMetadata {
   key: string;
   eventName: string;
-  handlerType: string;
-  executionMode: string;
+  handlerType: "command" | "mcpTool" | "prompt" | "agent";
+  command?: string;
+  async?: boolean;
+  server?: string;
+  tool?: string;
   matcher?: string | null;
-  command?: string | null;
   timeoutSec: number;
   statusMessage?: string | null;
   sourcePath: string;
