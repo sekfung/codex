@@ -28,7 +28,7 @@ RUN apt-get update \
     patchelf \
     # Linux bundle tooling (deb / rpm / AppImage) for `cargo tauri build`
     rpm \
-    libfuse2t64 \
+    libfuse2 \
     # Node.js toolchain for the ui/ frontend
     nodejs \
     npm \
