@@ -462,10 +462,15 @@ impl ChatWidget {
     ///
     /// Git repository root wins when available. Otherwise we fall back to the
     /// nearest project config layer so non-git projects can still surface a
-    /// stable project label.
+    /// stable project label. Subversion working-copy roots are resolved before
+    /// the project-config fallback so SVN checkouts get a stable label too.
     fn status_line_project_root_for_cwd(&self, cwd: &Path) -> Option<PathBuf> {
         if let Some(repo_root) = get_git_repo_root(cwd) {
             return Some(repo_root);
+        }
+
+        if let Some(svn_root) = resolve_svn_working_copy_root_sync(cwd) {
+            return Some(svn_root);
         }
 
         self.config

@@ -99,6 +99,7 @@ use crate::terminal_palette::stdout_color_level;
 use codex_git_utils::get_git_repo_root;
 use codex_terminal_detection::TerminalName;
 use codex_terminal_detection::terminal_info;
+use codex_vcs_utils::resolve_svn_working_copy_root_sync;
 
 /// Classifies a diff line for gutter sign rendering and style selection.
 ///
@@ -757,7 +758,10 @@ pub(crate) fn display_path_for(path: &Path, cwd: &Path) -> String {
         return stripped.display().to_string();
     }
 
-    let path_in_same_repo = match (get_git_repo_root(cwd), get_git_repo_root(path)) {
+    let path_in_same_repo = match (
+        get_git_repo_root(cwd).or_else(|| resolve_svn_working_copy_root_sync(cwd)),
+        get_git_repo_root(path).or_else(|| resolve_svn_working_copy_root_sync(path)),
+    ) {
         (Some(cwd_repo), Some(path_repo)) => cwd_repo == path_repo,
         _ => false,
     };

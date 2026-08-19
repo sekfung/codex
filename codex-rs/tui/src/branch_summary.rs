@@ -15,6 +15,7 @@ use std::collections::VecDeque;
 use std::path::Path;
 
 use serde::Deserialize;
+use codex_vcs_utils::is_svn_working_copy;
 
 use crate::workspace_command::WorkspaceCommand;
 #[cfg(test)]
@@ -95,8 +96,12 @@ struct GhRepoParent {
 
 /// Returns the checked-out branch name for one status-line working directory.
 ///
-/// Detached HEADs, non-git directories, and command failures return `None` so the renderer can
-/// omit the branch item without surfacing a background lookup error.
+/// For Git repositories, this reads `git branch --show-current`. For Subversion
+/// working copies, it falls back to `svn info --show-item relative-url`, which
+/// yields the repository-relative path (e.g. `trunk`, `branches/feature-x`).
+/// Detached HEADs, non-VCS directories, and command failures return `None` so
+/// the renderer can omit the branch item without surfacing a background lookup
+/// error.
 pub(crate) async fn current_branch_name(
     runner: &dyn WorkspaceCommandExecutor,
     cwd: &Path,
@@ -104,11 +109,27 @@ pub(crate) async fn current_branch_name(
     let output = run_git_command(runner, cwd, &["branch", "--show-current"])
         .await
         .ok()?;
-    if !output.success() {
+    if output.success() {
+        let name = output.stdout.trim();
+        if !name.is_empty() {
+            return Some(name.to_string());
+        }
+    }
+
+    // Not a git branch — try Subversion if this is an SVN working copy.
+    if !is_svn_working_copy(cwd) {
+        return None;
+    }
+    let svn_output = run_svn_command(runner, cwd, &["info", "--show-item", "relative-url"])
+        .await
+        .ok()?;
+    if !svn_output.success() {
         return None;
     }
 
-    Some(output.stdout.trim().to_string()).filter(|name| !name.is_empty())
+    let relative_url = svn_output.stdout.trim();
+    Some(relative_url.trim_start_matches("^/").to_string())
+        .filter(|name| !name.is_empty())
 }
 
 /// Resolves PR and branch-change metadata for one status-line working directory.
@@ -488,6 +509,25 @@ async fn run_git_command(
         .await
 }
 
+/// Runs a Subversion command through the workspace-command abstraction.
+///
+/// Prompting is disabled because status-line probes are background UI work. A
+/// command that needs authentication or user input should fail and leave the
+/// optional branch item hidden.
+async fn run_svn_command(
+    runner: &dyn WorkspaceCommandExecutor,
+    cwd: &Path,
+    args: &[&str],
+) -> Result<WorkspaceCommandOutput, crate::workspace_command::WorkspaceCommandError> {
+    let mut argv = Vec::with_capacity(args.len() + 1);
+    argv.push("svn".to_string());
+    argv.push("--non-interactive".to_string());
+    argv.extend(args.iter().map(|arg| (*arg).to_string()));
+    runner
+        .run(WorkspaceCommand::new(argv).cwd(cwd.to_path_buf()))
+        .await
+}
+
 /// Runs a GitHub CLI command through the workspace-command abstraction.
 ///
 /// Prompting is disabled because status-line probes are background UI work. A command that needs
@@ -590,6 +630,44 @@ mod tests {
             }
         );
         assert!(!runner.saw(&["git", "rev-parse", "HEAD"]));
+    }
+
+    #[tokio::test]
+    async fn current_branch_name_falls_back_to_svn_in_a_working_copy() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir(tmp.path().join(".svn")).expect("create .svn");
+        let runner = FakeRunner::new(vec![
+            response(
+                &["git", "branch", "--show-current"],
+                /*exit_code*/ 128,
+                "",
+            ),
+            response(
+                &["svn", "--non-interactive", "info", "--show-item", "relative-url"],
+                /*exit_code*/ 0,
+                "^/trunk\n",
+            ),
+        ]);
+
+        let branch = current_branch_name(&runner, tmp.path())
+            .await
+            .expect("svn branch name");
+
+        assert_eq!(branch, "trunk");
+    }
+
+    #[tokio::test]
+    async fn current_branch_name_returns_none_outside_vcs() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let subdir = tmp.path().join("non_vcs");
+        std::fs::create_dir(&subdir).expect("create subdirectory");
+        let runner = FakeRunner::new(vec![response(
+            &["git", "branch", "--show-current"],
+            /*exit_code*/ 128,
+            "",
+        )]);
+
+        assert_eq!(current_branch_name(&runner, &subdir).await, None);
     }
 
     #[tokio::test]
