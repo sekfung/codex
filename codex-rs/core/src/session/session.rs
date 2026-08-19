@@ -5,6 +5,7 @@ use crate::agents_md_manager::AgentsMdManager;
 use crate::config::ConstraintError;
 use crate::environment_selection::ThreadEnvironments;
 use crate::environment_selection::TurnEnvironmentSnapshot;
+use crate::hook_mcp_executor::CoreHookMcpExecutor;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::state::ActiveTurn;
 use codex_extension_api::ExtensionDataInit;
@@ -26,6 +27,7 @@ use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelections;
+use codex_protocol::security_risk::SecurityRiskScore;
 use codex_skills::SkillError;
 use std::sync::OnceLock;
 use tokio::sync::Semaphore;
@@ -144,6 +146,9 @@ impl SessionConfiguration {
             allow_login_shell: self.allow_login_shell,
             permission_profile: self.permission_profile_state.snapshot(),
             shell_environment_policy: self.shell_environment_policy.clone(),
+            exec_policy: None,
+            mcp_policy: None,
+            network_policy: None,
             selected_capability_roots: Vec::new(),
         }
     }
@@ -726,6 +731,18 @@ impl Session {
             config.current_time_reminder.as_ref(),
             external_time_provider,
         )?;
+        if thread_extension_init.get::<SecurityRiskScore>().is_none()
+            && let Some(score) = initial_history
+                .get_rollout_items()
+                .iter()
+                .rev()
+                .find_map(|item| match item {
+                    RolloutItem::SecurityRiskScore(score) => Some(score),
+                    _ => None,
+                })
+        {
+            thread_extension_init.insert(score.clone());
+        }
         let selected_capability_roots =
             match thread_extension_init.get::<Vec<SelectedCapabilityRoot>>() {
                 Some(roots) => roots.as_ref().clone(),
@@ -877,6 +894,7 @@ impl Session {
                     McpThreadIdentity {
                         session_source: &mcp_session_source,
                         originator: &mcp_originator,
+                        environments: McpEnvironmentScope::Initial(environment_selections),
                     },
                     /*ready_selected_capability_roots*/ &[],
                     /*executor_capability_discovery*/ None,
@@ -1030,7 +1048,8 @@ impl Session {
                     &mcp_projection.config,
                     auth.as_ref(),
                 )
-                    .into_keys()
+                    .into_iter()
+                    .filter_map(|(name, server)| server.enabled().then_some(name))
                     .collect::<Vec<_>>();
             session_telemetry.conversation_starts(
                 config.model_provider.name.as_str(),
@@ -1181,13 +1200,24 @@ impl Session {
                     (None, None)
                 };
 
+            // Hooks and extensions share one stable thread-owned MCP runtime handle.
+            let mcp_runtime = Arc::new(McpRuntime::empty(
+                mcp_projection.config.prefix_mcp_tool_names,
+            ));
             let hooks_config = build_hooks_config(
                 &config,
                 plugins_manager.as_ref(),
                 resolved_environments.single_local_environment(),
             )
             .await;
-            let (hooks, async_hook_results) = Hooks::new(hooks_config, thread_id)?;
+            let (hooks, async_hook_results) = Hooks::new(
+                hooks_config,
+                thread_id,
+                Arc::new(CoreHookMcpExecutor {
+                    runtime: Arc::clone(&mcp_runtime),
+                    thread_id,
+                }),
+            )?;
             for warning in hooks.startup_warnings() {
                 post_session_configured_events.push(Event {
                     id: INITIAL_SUBMIT_ID.to_owned(),
@@ -1204,10 +1234,23 @@ impl Session {
                     config.analytics_enabled,
                 )
             });
-            // Extensions need a stable thread-owned resource client before the Session exists.
-            let mcp_runtime = Arc::new(McpRuntime::empty(
-                mcp_projection.config.prefix_mcp_tool_names,
-            ));
+            for item in initial_history.get_rollout_items() {
+                match item {
+                    RolloutItem::Compacted(compacted) => {
+                        if let Some(checkpoint) = &compacted.mcp_resource_origins {
+                            mcp_runtime.restore_resource_origin_checkpoint(checkpoint);
+                        }
+                    }
+                    RolloutItem::EventMsg(event) => mcp_runtime.observe_event(event),
+                    RolloutItem::SessionMeta(_)
+                    | RolloutItem::ResponseItem(_)
+                    | RolloutItem::InterAgentCommunication(_)
+                    | RolloutItem::InterAgentCommunicationMetadata { .. }
+                    | RolloutItem::TurnContext(_)
+                    | RolloutItem::WorldState(_)
+                    | RolloutItem::SecurityRiskScore(_) => {}
+                }
+            }
             let session_extension_data =
                 codex_extension_api::ExtensionData::new(session_id.to_string());
             session_extension_data.insert(analytics_events_client.clone());
@@ -1394,9 +1437,6 @@ impl Session {
                 || mcp_auth_changes.has_changed().unwrap_or(false)
             {
                 sess.services
-                    .plugins_manager
-                    .set_auth_mode(latest_auth.as_ref().map(CodexAuth::api_auth_mode));
-                sess.services
                     .mcp_manager
                     .runtime_config_for_step(
                         config.as_ref(),
@@ -1405,6 +1445,9 @@ impl Session {
                         McpThreadIdentity {
                             session_source: &session_configuration.session_source,
                             originator: &session_configuration.originator,
+                            environments: McpEnvironmentScope::Live(
+                                &sess.services.turn_environments,
+                            ),
                         },
                         /*ready_selected_capability_roots*/ &[],
                         /*executor_capability_discovery*/ None,
