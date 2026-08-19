@@ -43,9 +43,11 @@ fn ignores_unrelated_failures() {
 #[test]
 fn support_latches_off_once_marked() {
     let support = HistoryModeSupport::default();
+    let cloned = support.clone();
     assert!(support.may_request_paginated());
+    assert!(cloned.may_request_paginated());
+    // The latch is shared — a separately-held clone observes the flip.
     support.mark_unsupported();
     assert_eq!(support.may_request_paginated(), false);
-    // Cloned handles share the latch — commands each hold their own clone.
-    assert_eq!(support.clone().may_request_paginated(), false);
+    assert_eq!(cloned.may_request_paginated(), false);
 }

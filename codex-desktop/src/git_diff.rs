@@ -161,7 +161,7 @@ fn untracked_paths(stdout: &str) -> Vec<&str> {
 }
 
 /// Argv for diffing one untracked file against the null device.
-fn untracked_diff_args<'a>(file: &'a str) -> Vec<&'a str> {
+fn untracked_diff_args(file: &str) -> Vec<&str> {
     vec![
         "diff",
         "--no-textconv",

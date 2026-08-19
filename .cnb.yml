@@ -55,9 +55,15 @@
             cd codex-rs
             cargo test -p codex-desktop
         - name: tauri-build
+          # Wrap `cargo tauri build` in a heartbeat loop: the release build of
+          # codex-desktop links the full codex workspace (~19 min) and can go
+          # silent for >10 min during linking, which trips CNB's no-output
+          # watchdog. The wrapper emits a heartbeat every 2 min to keep the
+          # stage alive.
           script: |
             cd codex-desktop
-            cargo tauri build
+            chmod +x .cnb/heartbeat.sh
+            HEARTBEAT_INTERVAL=120 ./.cnb/heartbeat.sh cargo tauri build
 
   pull_request:
     # ---- PR checks (official CNB Linux runner) ----

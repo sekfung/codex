@@ -29,10 +29,16 @@ RUN apt-get update \
     # Linux bundle tooling (deb / rpm / AppImage) for `cargo tauri build`
     rpm \
     libfuse2 \
-    # Node.js toolchain for the ui/ frontend
-    nodejs \
-    npm \
   && rm -rf /var/lib/apt/lists/*
+
+# --- Node.js toolchain for the ui/ frontend (root package.json requires >=22) ---
+# The Debian bookworm `nodejs` package is Node 18, which is too old for the
+# frontend deps (e.g. rolldown requires `node:util` styleText, added in 20.12).
+# Install Node.js 22 LTS from NodeSource instead.
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+  && apt-get install -y --no-install-recommends nodejs \
+  && rm -rf /var/lib/apt/lists/* \
+  && node --version && npm --version
 
 # --- Install pnpm (matching root package.json) ---
 RUN npm install -g pnpm@10.33.0
