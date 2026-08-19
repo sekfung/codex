@@ -1,5 +1,5 @@
-import { useEffect, useMemo } from "react";
-import { Loader2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Loader2, Search } from "lucide-react";
 
 import * as api from "../../api";
 import { useStore } from "../../store";
@@ -44,12 +44,21 @@ export function SkillsSettings() {
   // The store holds the full catalog (including disabled skills) precisely so
   // this screen can offer re-enabling; the `$` typeahead filters instead.
   const skills = state.skills;
+  const [query, setQuery] = useState("");
 
   // Grouped by scope so a repo-local skill is visibly different from a
   // system-wide one — the same skill name can exist in both.
+  const needle = query.trim().toLowerCase();
+  const visible = needle
+    ? skills.filter((skill) =>
+        [skill.interface?.displayName?.trim() || skill.name, skillSummary(skill), skill.path]
+          .some((field) => field.toLowerCase().includes(needle)),
+      )
+    : skills;
+
   const grouped = useMemo(() => {
     const byScope = new Map<string, SkillMetadata[]>();
-    for (const skill of skills) {
+    for (const skill of visible) {
       const list = byScope.get(skill.scope) ?? [];
       list.push(skill);
       byScope.set(skill.scope, list);
@@ -58,7 +67,7 @@ export function SkillsSettings() {
       list.sort((a, b) => a.name.localeCompare(b.name));
     }
     return [...byScope.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  }, [skills]);
+  }, [visible]);
 
   async function toggle(skill: SkillMetadata, enabled: boolean) {
     await run(
@@ -87,12 +96,32 @@ export function SkillsSettings() {
         description="技能是 Codex 可以按需加载的指令集，在对话框中用 $ 引用。这里只能启用或停用它们 — 技能内容定义在各自的 SKILL.md 中。"
       />
 
-      {grouped.length === 0 ? (
-        <SettingsSection title="已发现的技能">
-          <div className="px-4 py-6 text-center text-sm text-muted-foreground">
-            当前打开的项目中没有发现技能。
-          </div>
-        </SettingsSection>
+      <div className="mb-8 flex items-center gap-2">
+        <div className="relative flex-1">
+          <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="搜索技能…"
+            className="h-8 w-full rounded-lg border border-input bg-background pr-2 pl-8 text-[13px] placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          />
+        </div>
+      </div>
+
+      {visible.length === 0 ? (
+        needle ? (
+          <SettingsSection title="已发现的技能">
+            <div className="px-4 py-6 text-center text-sm text-muted-foreground">
+              没有匹配的技能。
+            </div>
+          </SettingsSection>
+        ) : (
+          <SettingsSection title="已发现的技能">
+            <div className="px-4 py-6 text-center text-sm text-muted-foreground">
+              当前打开的项目中没有发现技能。
+            </div>
+          </SettingsSection>
+        )
       ) : (
         grouped.map(([scope, entries]) => (
           <SettingsSection key={scope} title={`${SCOPE_LABELS[scope] ?? scope}技能`}>
