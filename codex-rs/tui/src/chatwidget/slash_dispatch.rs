@@ -418,11 +418,11 @@ impl ChatWidget {
                 tokio::spawn(async move {
                     let text = match runner {
                         Some(runner) => match get_git_diff(runner.as_ref(), &cwd).await {
-                            Ok((is_git_repo, diff_text)) => {
-                                if is_git_repo {
+                            Ok((is_vcs_repo, diff_text)) => {
+                                if is_vcs_repo {
                                     diff_text
                                 } else {
-                                    "`/diff` — _not inside a git repository_".to_string()
+                                    "`/diff` — _not inside a version-control working copy_".to_string()
                                 }
                             }
                             Err(e) => format!("Failed to compute diff: {e}"),

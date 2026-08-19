@@ -8,6 +8,7 @@
 //! `None`, which is the same answer a non-working-copy gives.
 
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -56,6 +57,33 @@ pub fn is_svn_working_copy(path: &Path) -> bool {
         match dir.parent() {
             Some(parent) => dir = parent,
             None => return false,
+        }
+    }
+}
+
+/// The root of the Subversion working copy containing `path`, if any.
+///
+/// A synchronous, filesystem-only counterpart of
+/// [`crate::resolve_svn_working_copy_root`] for callers that are not async and
+/// need the actual root path (rather than just a `bool`). It uses the same
+/// marker rule: the nearest ancestor carrying a `.svn` directory is the
+/// working-copy root, and the marker must be a directory to avoid confusing a
+/// file of that name with a working copy.
+pub fn resolve_svn_working_copy_root_sync(path: &Path) -> Option<PathBuf> {
+    let mut dir = if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        path.parent()?.to_path_buf()
+    };
+
+    loop {
+        let marker = dir.join(".svn");
+        if marker.is_dir() {
+            return Some(dir);
+        }
+        match dir.parent() {
+            Some(parent) => dir = parent.to_path_buf(),
+            None => return None,
         }
     }
 }
