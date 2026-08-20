@@ -133,7 +133,6 @@ members = [
     "codex-experimental-api-macros",
     "plugin",
     "model-provider",
-    "../codex-desktop",
 ]
 resolver = "2"
 
