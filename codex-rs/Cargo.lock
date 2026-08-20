@@ -2869,6 +2869,7 @@ version = "0.0.0"
 dependencies = [
  "codex-connectors",
  "codex-core-plugins",
+ "codex-file-system",
  "codex-plugin",
  "codex-utils-path-uri",
  "serde_json",
@@ -4197,6 +4198,7 @@ dependencies = [
  "futures",
  "http 1.4.0",
  "keyring",
+ "libc",
  "memchr",
  "oauth2",
  "pretty_assertions",
@@ -4215,6 +4217,7 @@ dependencies = [
  "urlencoding",
  "webbrowser",
  "which 8.0.0",
+ "windows-sys 0.52.0",
  "wiremock",
 ]
 
