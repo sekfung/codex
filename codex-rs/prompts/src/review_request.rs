@@ -3,7 +3,6 @@ use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_template::Template;
-use codex_vcs_utils::is_svn_working_copy;
 use std::sync::LazyLock;
 
 /// Review thread system prompt.
@@ -27,23 +26,6 @@ static BASE_BRANCH_PROMPT_BACKUP_TEMPLATE: LazyLock<Template> = LazyLock::new(||
 static BASE_BRANCH_PROMPT_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
     Template::parse(BASE_BRANCH_PROMPT)
         .unwrap_or_else(|err| panic!("base branch review prompt must parse: {err}"))
-});
-
-const SVN_BASE_PATH_PROMPT: &str = "Review the code changes in this Subversion working copy against '{{base_path}}'. Run `svn diff {{base_path}}` from the working copy root to see what differs. Provide prioritized, actionable findings.";
-static SVN_BASE_PATH_PROMPT_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
-    Template::parse(SVN_BASE_PATH_PROMPT)
-        .unwrap_or_else(|err| panic!("svn base path review prompt must parse: {err}"))
-});
-
-const REVISION_PROMPT_WITH_TITLE: &str = "Review the code changes introduced by Subversion revision {{revision}} (\"{{title}}\"). Run `svn diff -c {{revision}}` to inspect them. Provide prioritized, actionable findings.";
-const REVISION_PROMPT: &str = "Review the code changes introduced by Subversion revision {{revision}}. Run `svn diff -c {{revision}}` to inspect them. Provide prioritized, actionable findings.";
-static REVISION_PROMPT_WITH_TITLE_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
-    Template::parse(REVISION_PROMPT_WITH_TITLE)
-        .unwrap_or_else(|err| panic!("revision review prompt with title must parse: {err}"))
-});
-static REVISION_PROMPT_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
-    Template::parse(REVISION_PROMPT)
-        .unwrap_or_else(|err| panic!("revision review prompt must parse: {err}"))
 });
 
 const COMMIT_PROMPT_WITH_TITLE: &str = "Review the code changes introduced by commit {{sha}} (\"{{title}}\"). Provide prioritized, actionable findings.";
@@ -77,19 +59,6 @@ pub fn resolve_review_request(
 pub fn review_prompt(target: &ReviewTarget, cwd: &AbsolutePathBuf) -> anyhow::Result<String> {
     match target {
         ReviewTarget::UncommittedChanges => Ok(UNCOMMITTED_PROMPT.to_string()),
-        // A base-branch comparison means the same thing in both systems, so
-        // the variant is shared and only the commands named in the prompt
-        // differ. Without this branch a Subversion working copy fails outright:
-        // `merge_base_with_head` returns an error rather than `None` when the
-        // directory is not a git repository, and `?` propagates it, so the
-        // review never starts. The git wording below is reached only when the
-        // directory *is* a git repository whose branch cannot be resolved.
-        ReviewTarget::BaseBranch { branch } if is_svn_working_copy(cwd.as_path()) => {
-            Ok(render_review_prompt(
-                &SVN_BASE_PATH_PROMPT_TEMPLATE,
-                [("base_path", branch.as_str())],
-            ))
-        }
         ReviewTarget::BaseBranch { branch } => {
             if let Some(commit) = merge_base_with_head(cwd, branch)? {
                 Ok(render_review_prompt(
@@ -119,19 +88,6 @@ pub fn review_prompt(target: &ReviewTarget, cwd: &AbsolutePathBuf) -> anyhow::Re
                 ))
             }
         }
-        ReviewTarget::Revision { revision, title } => {
-            if let Some(title) = title {
-                Ok(render_review_prompt(
-                    &REVISION_PROMPT_WITH_TITLE_TEMPLATE,
-                    [("revision", revision.as_str()), ("title", title.as_str())],
-                ))
-            } else {
-                Ok(render_review_prompt(
-                    &REVISION_PROMPT_TEMPLATE,
-                    [("revision", revision.as_str())],
-                ))
-            }
-        }
         ReviewTarget::Custom { instructions } => {
             let prompt = instructions.trim();
             if prompt.is_empty() {
@@ -155,10 +111,6 @@ pub fn user_facing_hint(target: &ReviewTarget) -> String {
     match target {
         ReviewTarget::UncommittedChanges => "current changes".to_string(),
         ReviewTarget::BaseBranch { branch } => format!("changes against '{branch}'"),
-        ReviewTarget::Revision { revision, title } => match title {
-            Some(title) => format!("r{revision}: {title}"),
-            None => format!("r{revision}"),
-        },
         ReviewTarget::Commit { sha, title } => {
             let short_sha: String = sha.chars().take(7).collect();
             if let Some(title) = title {

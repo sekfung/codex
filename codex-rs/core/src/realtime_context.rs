@@ -1,8 +1,9 @@
 use crate::compact::content_items_to_text;
 use crate::event_mapping::is_contextual_user_message_content;
-use crate::project_root::resolve_root_project_for_trust;
 use crate::session::session::Session;
 use chrono::Utc;
+use codex_exec_server::LOCAL_FS;
+use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::plaintext_agent_message_content;
 use codex_thread_store::ListThreadsParams;
@@ -12,7 +13,6 @@ use codex_thread_store::ThreadSortKey;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
-use codex_vcs_utils::VcsKindLabels as _;
 use dirs::home_dir;
 use std::cmp::Reverse;
 use std::collections::HashMap;
@@ -163,18 +163,18 @@ async fn build_recent_work_section(
     let mut groups: HashMap<PathBuf, Vec<&StoredThread>> = HashMap::new();
     for entry in recent_threads {
         let group = match AbsolutePathBuf::from_absolute_path(entry.cwd.as_path()) {
-            Ok(entry_cwd) => resolve_root_project_for_trust(&entry_cwd)
+            Ok(entry_cwd) => resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &entry_cwd)
                 .await
-                .map(|root| root.path.into_path_buf())
+                .map(AbsolutePathBuf::into_path_buf)
                 .unwrap_or_else(|| entry.cwd.clone()),
             Err(_) => entry.cwd.clone(),
         };
         groups.entry(group).or_default().push(entry);
     }
 
-    let current_group = resolve_root_project_for_trust(cwd)
+    let current_group = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), cwd)
         .await
-        .map(|root| root.path.into_path_buf())
+        .map(AbsolutePathBuf::into_path_buf)
         .unwrap_or_else(|| cwd.clone().into_path_buf());
     let mut groups = groups.into_iter().collect::<Vec<_>>();
     groups.sort_by(|(left_group, left_entries), (right_group, right_entries)| {
@@ -345,24 +345,23 @@ async fn build_workspace_section_with_user_root(
     user_root: Option<PathBuf>,
 ) -> Option<String> {
     let cwd_path = cwd.as_path();
-    let project_root = resolve_root_project_for_trust(cwd).await;
-    let root_path = project_root.as_ref().map(|root| root.path.clone());
+    let git_root = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), cwd).await;
     let cwd_tree = render_tree(cwd_path);
-    let git_root_tree = root_path
+    let git_root_tree = git_root
         .as_ref()
-        .filter(|root| root.as_path() != cwd_path)
-        .and_then(|root| render_tree(root.as_path()));
+        .filter(|git_root| git_root.as_path() != cwd_path)
+        .and_then(|git_root| render_tree(git_root.as_path()));
     let user_root_tree = user_root
         .as_ref()
         .filter(|user_root| user_root.as_path() != cwd_path)
         .filter(|user_root| {
-            root_path
+            git_root
                 .as_ref()
-                .is_none_or(|root| root.as_path() != user_root.as_path())
+                .is_none_or(|git_root| git_root.as_path() != user_root.as_path())
         })
         .and_then(|user_root| render_tree(user_root));
 
-    if cwd_tree.is_none() && project_root.is_none() && user_root_tree.is_none() {
+    if cwd_tree.is_none() && git_root.is_none() && user_root_tree.is_none() {
         return None;
     }
 
@@ -371,11 +370,9 @@ async fn build_workspace_section_with_user_root(
         format!("Working directory name: {}", file_name_string(cwd_path)),
     ];
 
-    if let Some(root) = &project_root {
-        let name = root.vcs.short_name();
-        let path = root.path.as_path();
-        lines.push(format!("{name} root: {}", path.display()));
-        lines.push(format!("{name} project: {}", file_name_string(path)));
+    if let Some(git_root) = &git_root {
+        lines.push(format!("Git root: {}", git_root.display()));
+        lines.push(format!("Git project: {}", file_name_string(git_root)));
     }
     if let Some(user_root) = &user_root {
         lines.push(format!("User root: {}", user_root.display()));
@@ -503,12 +500,13 @@ async fn format_thread_group(
     let latest = entries.first()?;
     let group_label =
         if let Ok(latest_cwd) = AbsolutePathBuf::from_absolute_path(latest.cwd.as_path()) {
-            // The label names whichever system claimed the directory. Before
-            // Subversion was resolved here, an SVN working copy fell through to
-            // "Directory" and the model was told it was looking at loose files.
-            match resolve_root_project_for_trust(&latest_cwd).await {
-                Some(root) => format!("### {}: {}", root.vcs.label(), group.display()),
-                None => format!("### Directory: {}", group.display()),
+            if resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &latest_cwd)
+                .await
+                .is_some()
+            {
+                format!("### Git repo: {}", group.display())
+            } else {
+                format!("### Directory: {}", group.display())
             }
         } else {
             format!("### Directory: {}", group.display())

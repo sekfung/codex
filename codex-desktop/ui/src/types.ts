@@ -340,7 +340,7 @@ export interface GitCommitOption {
  * are hidden entirely rather than offered empty.
  */
 /** Which system's review targets the picker should offer. */
-export type PickerVcs = "git" | "subversion" | "none";
+export type PickerVcs = "git" | "none";
 
 export interface GitRefs {
   vcs: PickerVcs;
@@ -1082,8 +1082,6 @@ export type ReviewTargetInput =
   | { kind: "uncommittedChanges" }
   | { kind: "baseBranch"; branch: string }
   | { kind: "commit"; sha: string; title?: string | null }
-  /** Subversion's counterpart to `commit` — a revision number, not a hash. */
-  | { kind: "revision"; revision: string; title?: string | null }
   | { kind: "custom"; instructions: string };
 
 // -- Queue (`thread/queue/*`) ------------------------------------------------

@@ -109,6 +109,7 @@ pub async fn list_threads(
                 source_kinds: None,
                 archived,
                 section_id: None,
+                project_id: None,
                 cwd: Some(ThreadListCwdFilter::One(project_path)),
                 use_state_db_only: false,
                 search_term: None,

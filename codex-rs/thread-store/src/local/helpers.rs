@@ -142,7 +142,6 @@ pub(super) fn stored_thread_from_rollout_item(
         item.git_sha.clone(),
         item.git_branch.clone(),
         item.git_origin_url.clone(),
-        item.git_vcs.clone(),
     );
     let source = item.source.unwrap_or(SessionSource::Unknown);
     let preview = item
@@ -311,20 +310,11 @@ pub(super) fn git_info_from_parts(
     sha: Option<String>,
     branch: Option<String>,
     origin_url: Option<String>,
-    vcs: Option<String>,
 ) -> Option<GitInfo> {
     if sha.is_none() && branch.is_none() && origin_url.is_none() {
         return None;
     }
     Some(GitInfo {
-        // An unrecognised or absent discriminator resolves to git. Absent means
-        // the row predates Subversion support and was written by a git-only
-        // build; unrecognised means a newer build wrote a system this one does
-        // not know, and git is the safer of the two readings because it is what
-        // every other field here was shaped for.
-        vcs: vcs
-            .and_then(|value| serde_json::from_value(serde_json::Value::String(value)).ok())
-            .unwrap_or_default(),
         commit_hash: sha.as_deref().map(GitSha::new),
         branch,
         repository_url: origin_url,

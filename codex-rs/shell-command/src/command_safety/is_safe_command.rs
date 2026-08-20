@@ -1,9 +1,5 @@
 use crate::bash::parse_shell_lc_plain_commands;
 use crate::command_safety::is_dangerous_command::executable_name_lookup_key;
-// Find the first matching git subcommand, skipping known global options that
-// may appear before it (e.g., `-C`, `-c`, `--git-dir`).
-// Implemented in `is_dangerous_command` and shared here.
-use crate::command_safety::is_dangerous_command::find_git_subcommand;
 #[cfg(windows)]
 use crate::command_safety::windows_safe_commands::is_safe_command_windows;
 #[cfg(windows)]
@@ -153,11 +149,8 @@ fn is_safe_to_call_with_exec(command: &[String]) -> bool {
             })
         }
 
-        // Git
-        Some("git") => is_safe_git_command(command),
-
-        // Subversion
-        Some("svn") => is_safe_svn_command(command),
+        // Repository configuration can make even read-only Git commands execute helpers.
+        Some("git") => false,
 
         // Special-case `sed -n {N|M,N}p`
         Some("sed")
@@ -173,237 +166,6 @@ fn is_safe_to_call_with_exec(command: &[String]) -> bool {
         // ── anything else ─────────────────────────────────────────────────
         _ => false,
     }
-}
-
-pub(crate) fn is_safe_git_command(command: &[String]) -> bool {
-    let Some((subcommand_idx, subcommand)) =
-        find_git_subcommand(command, &["status", "log", "diff", "show", "branch"])
-    else {
-        return false;
-    };
-
-    let global_args = &command[1..subcommand_idx];
-    if git_has_unsafe_global_option(global_args) {
-        return false;
-    }
-
-    let subcommand_args = &command[subcommand_idx + 1..];
-
-    match subcommand {
-        "status" | "log" | "diff" | "show" => git_subcommand_args_are_read_only(subcommand_args),
-        "branch" => {
-            git_subcommand_args_are_read_only(subcommand_args)
-                && git_branch_is_read_only(subcommand_args)
-        }
-        other => {
-            debug_assert!(false, "unexpected git subcommand from matcher: {other}");
-            false
-        }
-    }
-}
-
-/// Read-only Subversion subcommands, including the aliases `svn` accepts.
-///
-/// Aliases are listed explicitly rather than normalized because the allowlist
-/// must fail closed: an alias nobody enumerated (`ci` for `commit`, `co` for
-/// `checkout`) simply does not match and falls through to "not safe".
-const READ_ONLY_SVN_SUBCOMMANDS: &[&str] = &[
-    "annotate", "ann", "blame", "praise", // all four are the same command
-    "cat", "diff", "di", "info", "list", "ls", "log", "plist", "pl", "proplist", "pget", "pg",
-    "propget", "status", "stat", "st",
-];
-
-/// Options that make an otherwise read-only `svn` invocation unsafe.
-///
-/// The first three are Subversion's equivalent of git's `--ext-diff`: they name
-/// a program for `svn` to execute. `--config-dir`/`--config-option` are worse
-/// than they look, because a config override can itself set `diff-cmd` — so
-/// blocking the direct spellings without blocking config injection would leave
-/// the hole open. `--extensions` is forwarded verbatim to the diff program.
-///
-/// The credential and certificate options are refused for a different reason:
-/// they do not modify the repository, but they put secrets on a command line
-/// this agent logs, or disable the TLS verification that makes a fetch
-/// trustworthy. Neither belongs in a silently auto-approved command.
-const UNSAFE_SVN_OPTIONS: &[GitOptionPattern] = &[
-    GitOptionPattern::Exact("--diff-cmd"),
-    GitOptionPattern::Prefix("--diff-cmd="),
-    GitOptionPattern::Exact("--diff3-cmd"),
-    GitOptionPattern::Prefix("--diff3-cmd="),
-    GitOptionPattern::Exact("--editor-cmd"),
-    GitOptionPattern::Prefix("--editor-cmd="),
-    GitOptionPattern::Exact("--config-dir"),
-    GitOptionPattern::Prefix("--config-dir="),
-    GitOptionPattern::Exact("--config-option"),
-    GitOptionPattern::Prefix("--config-option="),
-    GitOptionPattern::Exact("--extensions"),
-    GitOptionPattern::Prefix("--extensions="),
-    GitOptionPattern::Exact("-x"),
-    GitOptionPattern::ShortWithInlineValue("-x"),
-    GitOptionPattern::Exact("--username"),
-    GitOptionPattern::Prefix("--username="),
-    GitOptionPattern::Exact("--password"),
-    GitOptionPattern::Prefix("--password="),
-    GitOptionPattern::Exact("--password-from-stdin"),
-    GitOptionPattern::Exact("--trust-server-cert"),
-    GitOptionPattern::Exact("--trust-server-cert-failures"),
-    GitOptionPattern::Prefix("--trust-server-cert-failures="),
-];
-
-/// Repository URL schemes `svn` accepts as an operand.
-const SVN_URL_SCHEMES: &[&str] = &["http://", "https://", "svn://", "svn+ssh://", "file://"];
-
-/// Whether an argument addresses a repository over the network rather than the
-/// working copy in front of us.
-fn is_svn_url(arg: &str) -> bool {
-    SVN_URL_SCHEMES.iter().any(|scheme| arg.starts_with(scheme))
-}
-
-/// Read-only Subversion commands, the counterpart of [`is_safe_git_command`].
-///
-/// The shape mirrors the git classifier — allowlist the subcommand, then refuse
-/// anything in the argument list that could turn a read into something else —
-/// but two differences are deliberate and neither is cosmetic.
-///
-/// **Subversion's reads reach the network.** `svn` keeps no local history, so
-/// `log`, `info` and revision-ranged `diff` contact the repository server where
-/// their git equivalents stay on disk. That alone is not disqualifying:
-/// consulting the repository a working copy already points at is the ordinary
-/// way to read Subversion, and refusing it would auto-approve nothing useful.
-/// What *is* refused is an explicit URL operand, because
-/// `svn log https://elsewhere/repo` is not an inspection of the checkout in
-/// front of the agent — it is a fetch from a server the user never named, and
-/// that is a different act requiring a different answer.
-///
-/// **Options come after the subcommand.** Unlike git, `svn` takes essentially
-/// all of its options positionally after the verb, so there is no global/
-/// subcommand split to police separately; every argument is checked the same
-/// way.
-pub(crate) fn is_safe_svn_command(command: &[String]) -> bool {
-    let Some(cmd0) = command.first().map(String::as_str) else {
-        return false;
-    };
-    if executable_name_lookup_key(cmd0).as_deref() != Some("svn") {
-        return false;
-    }
-
-    // The subcommand is the first bare word. Anything before it is an option,
-    // and options are vetted below along with everything else.
-    let Some(subcommand) = command
-        .iter()
-        .skip(1)
-        .map(String::as_str)
-        .find(|arg| !arg.starts_with('-'))
-    else {
-        // `svn` with no subcommand prints usage, but so does `svn --version`;
-        // neither reads a repository, and neither is worth allowlisting.
-        return false;
-    };
-
-    if !READ_ONLY_SVN_SUBCOMMANDS.contains(&subcommand) {
-        return false;
-    }
-
-    !command
-        .iter()
-        .skip(1)
-        .map(String::as_str)
-        .any(|arg| is_svn_url(arg) || git_matches_option_pattern(arg, UNSAFE_SVN_OPTIONS))
-}
-
-// Treat `git branch` as safe only when the arguments clearly indicate
-// a read-only query, not a branch mutation (create/rename/delete).
-fn git_branch_is_read_only(branch_args: &[String]) -> bool {
-    if branch_args.is_empty() {
-        // `git branch` with no additional args lists branches.
-        return true;
-    }
-
-    let mut saw_read_only_flag = false;
-    for arg in branch_args.iter().map(String::as_str) {
-        match arg {
-            "--list" | "-l" | "--show-current" | "-a" | "--all" | "-r" | "--remotes" | "-v"
-            | "-vv" | "--verbose" => {
-                saw_read_only_flag = true;
-            }
-            _ if arg.starts_with("--format=") => {
-                saw_read_only_flag = true;
-            }
-            _ => {
-                // Any other flag or positional argument may create, rename, or delete branches.
-                return false;
-            }
-        }
-    }
-
-    saw_read_only_flag
-}
-
-#[derive(Clone, Copy)]
-enum GitOptionPattern {
-    Exact(&'static str),
-    ShortWithInlineValue(&'static str),
-    Prefix(&'static str),
-}
-
-const UNSAFE_GIT_GLOBAL_OPTIONS: &[GitOptionPattern] = &[
-    GitOptionPattern::Exact("-C"),
-    GitOptionPattern::ShortWithInlineValue("-C"),
-    GitOptionPattern::Exact("-c"),
-    GitOptionPattern::ShortWithInlineValue("-c"),
-    GitOptionPattern::Exact("-p"),
-    GitOptionPattern::Exact("--config-env"),
-    GitOptionPattern::Prefix("--config-env="),
-    GitOptionPattern::Exact("--exec-path"),
-    GitOptionPattern::Prefix("--exec-path="),
-    GitOptionPattern::Exact("--git-dir"),
-    GitOptionPattern::Prefix("--git-dir="),
-    GitOptionPattern::Exact("--namespace"),
-    GitOptionPattern::Prefix("--namespace="),
-    GitOptionPattern::Exact("--paginate"),
-    GitOptionPattern::Exact("--super-prefix"),
-    GitOptionPattern::Prefix("--super-prefix="),
-    GitOptionPattern::Exact("--work-tree"),
-    GitOptionPattern::Prefix("--work-tree="),
-];
-
-const UNSAFE_GIT_SUBCOMMAND_OPTIONS: &[GitOptionPattern] = &[
-    GitOptionPattern::Exact("--output"),
-    GitOptionPattern::Prefix("--output="),
-    GitOptionPattern::Exact("--ext-diff"),
-    GitOptionPattern::Exact("--textconv"),
-    GitOptionPattern::Exact("--exec"),
-    GitOptionPattern::Prefix("--exec="),
-];
-
-impl GitOptionPattern {
-    fn matches(self, arg: &str) -> bool {
-        match self {
-            GitOptionPattern::Exact(option) => arg == option,
-            GitOptionPattern::ShortWithInlineValue(option) => {
-                arg.starts_with(option) && arg.len() > option.len()
-            }
-            GitOptionPattern::Prefix(prefix) => arg.starts_with(prefix),
-        }
-    }
-}
-
-fn git_matches_option_pattern(arg: &str, patterns: &[GitOptionPattern]) -> bool {
-    patterns.iter().any(|pattern| pattern.matches(arg))
-}
-
-fn git_has_unsafe_global_option(global_args: &[String]) -> bool {
-    global_args
-        .iter()
-        .map(String::as_str)
-        .any(|arg| git_matches_option_pattern(arg, UNSAFE_GIT_GLOBAL_OPTIONS))
-}
-
-fn git_subcommand_args_are_read_only(args: &[String]) -> bool {
-    !args
-        .iter()
-        .map(String::as_str)
-        .any(|arg| git_matches_option_pattern(arg, UNSAFE_GIT_SUBCOMMAND_OPTIONS))
 }
 
 // (bash parsing helpers implemented in crate::bash)
@@ -457,13 +219,6 @@ mod tests {
     #[test]
     fn known_safe_examples() {
         assert!(is_safe_to_call_with_exec(&vec_str(&["ls"])));
-        assert!(is_safe_to_call_with_exec(&vec_str(&["git", "status"])));
-        assert!(is_safe_to_call_with_exec(&vec_str(&["git", "branch"])));
-        assert!(is_safe_to_call_with_exec(&vec_str(&[
-            "git",
-            "branch",
-            "--show-current"
-        ])));
         assert!(is_safe_to_call_with_exec(&vec_str(&["base64"])));
         assert!(is_safe_to_call_with_exec(&vec_str(&[
             "sed", "-n", "1,5p", "file.txt"
@@ -489,286 +244,25 @@ mod tests {
     }
 
     #[test]
-    fn git_branch_mutating_flags_are_not_safe() {
-        assert!(!is_known_safe_command(&vec_str(&[
-            "git", "branch", "-d", "feature"
-        ])));
-        assert!(!is_known_safe_command(&vec_str(&[
-            "git",
-            "branch",
-            "new-branch"
-        ])));
-    }
-
-    #[test]
-    fn git_branch_global_options_respect_safety_rules() {
-        assert!(is_known_safe_command(&vec_str(&[
-            "git",
-            "branch",
-            "--show-current",
-        ])));
-        assert!(!is_known_safe_command(&vec_str(&[
-            "git", "branch", "-d", "feature",
-        ])));
-        assert!(!is_known_safe_command(&vec_str(&[
-            "bash",
-            "-lc",
-            "git branch -d feature",
-        ])));
-    }
-
-    #[test]
-    fn git_first_positional_is_the_subcommand() {
-        // In git, the first non-option token is the subcommand. Later positional
-        // args (like branch names) must not be treated as subcommands.
-        assert!(!is_known_safe_command(&vec_str(&[
-            "git", "checkout", "status",
-        ])));
-    }
-
-    #[test]
-    fn git_output_flags_are_not_safe() {
-        assert!(!is_known_safe_command(&vec_str(&[
-            "git",
-            "log",
-            "--output=/tmp/git-log-out-test",
-            "-n",
-            "1",
-        ])));
-        assert!(!is_known_safe_command(&vec_str(&[
-            "git",
-            "diff",
-            "--output",
-            "/tmp/git-diff-out-test",
-        ])));
-        assert!(!is_known_safe_command(&vec_str(&[
-            "git",
-            "show",
-            "--output=/tmp/git-show-out-test",
-            "HEAD",
-        ])));
-    }
-
-    #[test]
-    fn git_global_pagination_flags_are_not_safe() {
-        assert!(!is_known_safe_command(&vec_str(&[
-            "git",
-            "--paginate",
-            "log",
-            "-1",
-        ])));
-        assert!(!is_known_safe_command(&vec_str(&[
-            "git", "-p", "log", "-1",
-        ])));
-        assert!(!is_known_safe_command(&vec_str(&[
-            "bash",
-            "-lc",
-            "git --paginate log -1",
-        ])));
-        assert!(!is_known_safe_command(&vec_str(&[
-            "bash",
-            "-lc",
-            "git -p log -1",
-        ])));
-    }
-
-    #[test]
-    fn git_subcommand_patch_flags_remain_safe() {
-        assert!(is_known_safe_command(&vec_str(&["git", "log", "-p", "-1"])));
-        assert!(is_known_safe_command(&vec_str(&["git", "diff", "-p"])));
-        assert!(is_known_safe_command(&vec_str(&[
-            "git", "show", "-p", "HEAD",
-        ])));
-        assert!(is_known_safe_command(&vec_str(&[
-            "bash",
-            "-lc",
-            "git log -p -1",
-        ])));
-    }
-
-    #[test]
-    fn git_global_override_flags_are_not_safe() {
-        assert!(!is_known_safe_command(&vec_str(&[
-            "git", "-C", ".", "status",
-        ])));
-        assert!(!is_known_safe_command(&vec_str(&["git", "-C.", "status",])));
-        assert!(!is_known_safe_command(&vec_str(&[
-            "git",
-            "-c",
-            "core.pager=cat",
-            "log",
-            "-n",
-            "1",
-        ])));
-        assert!(!is_known_safe_command(&vec_str(&[
-            "git",
-            "-ccore.pager=cat",
-            "status",
-        ])));
-
+    fn git_commands_are_not_known_safe() {
         for args in [
-            vec_str(&["git", "--config-env", "core.pager=PAGER", "show", "HEAD"]),
-            vec_str(&["git", "--config-env=core.pager=PAGER", "show", "HEAD"]),
-            vec_str(&["git", "--git-dir", ".evil-git", "diff", "HEAD~1..HEAD"]),
-            vec_str(&["git", "--git-dir=.evil-git", "diff", "HEAD~1..HEAD"]),
-            vec_str(&["git", "--work-tree", ".", "status"]),
-            vec_str(&["git", "--work-tree=.", "status"]),
-            vec_str(&["git", "--exec-path", ".git/helpers", "show", "HEAD"]),
-            vec_str(&["git", "--exec-path=.git/helpers", "show", "HEAD"]),
-            vec_str(&["git", "--namespace", "attacker", "show", "HEAD"]),
-            vec_str(&["git", "--namespace=attacker", "show", "HEAD"]),
-            vec_str(&["git", "--super-prefix", "attacker/", "show", "HEAD"]),
-            vec_str(&["git", "--super-prefix=attacker/", "show", "HEAD"]),
+            vec_str(&["git", "status", "--short"]),
+            vec_str(&["git", "log", "-p", "-1"]),
+            vec_str(&["git", "diff"]),
+            vec_str(&["git", "show", "HEAD"]),
+            vec_str(&["git", "branch"]),
+            vec_str(&["git", "branch", "--show-current"]),
+            vec_str(&["git", "--version"]),
+            vec_str(&["/usr/bin/git", "status"]),
+            vec_str(&["bash", "-lc", "git status"]),
+            vec_str(&["zsh", "-lc", "cd nested && git status"]),
+            vec_str(&["bash", "-lc", "git diff | head -20"]),
         ] {
             assert!(
                 !is_known_safe_command(&args),
-                "expected {args:?} to require approval due to unsafe git global option",
+                "Git must not be trusted from its arguments alone: {args:?}",
             );
         }
-
-        assert!(!is_known_safe_command(&vec_str(&[
-            "bash",
-            "-lc",
-            "git -C .project-deps/test-fixtures status",
-        ])));
-        assert!(!is_known_safe_command(&vec_str(&[
-            "bash",
-            "-lc",
-            "git --git-dir=.evil-git diff HEAD~1..HEAD",
-        ])));
-    }
-
-    #[test]
-    fn svn_read_only_subcommands_and_aliases_are_safe() {
-        for argv in [
-            vec!["svn", "status"],
-            vec!["svn", "st"],
-            vec!["svn", "stat"],
-            vec!["svn", "info"],
-            vec!["svn", "log"],
-            vec!["svn", "diff"],
-            vec!["svn", "di"],
-            vec!["svn", "cat", "src/main.rs"],
-            vec!["svn", "ls"],
-            vec!["svn", "blame", "src/main.rs"],
-            vec!["svn", "praise", "src/main.rs"],
-            vec!["svn", "proplist"],
-            vec!["svn", "pg", "svn:ignore"],
-            vec!["svn", "status", "--xml"],
-            vec!["svn", "diff", "-r", "100:200"],
-        ] {
-            assert!(
-                is_safe_to_call_with_exec(&vec_str(&argv)),
-                "expected safe: {argv:?}"
-            );
-        }
-    }
-
-    /// The allowlist must fail closed on every mutating verb, including the
-    /// two-letter aliases that are easy to overlook: `ci` commits and `co`
-    /// checks out.
-    #[test]
-    fn svn_mutating_subcommands_are_not_safe() {
-        for argv in [
-            vec!["svn", "commit"],
-            vec!["svn", "ci"],
-            vec!["svn", "checkout", "https://example.com/repo"],
-            vec!["svn", "co", "https://example.com/repo"],
-            vec!["svn", "update"],
-            vec!["svn", "up"],
-            vec!["svn", "add", "file.txt"],
-            vec!["svn", "delete", "file.txt"],
-            vec!["svn", "revert", "file.txt"],
-            vec!["svn", "merge"],
-            vec!["svn", "switch"],
-            vec!["svn", "propset", "svn:ignore", "target"],
-            vec!["svn"],
-        ] {
-            assert!(
-                !is_safe_to_call_with_exec(&vec_str(&argv)),
-                "expected unsafe: {argv:?}"
-            );
-        }
-    }
-
-    /// Subversion reads reach the network, which is fine against the working
-    /// copy's own repository and not fine against a server named on the command
-    /// line. A URL operand is the difference.
-    #[test]
-    fn svn_url_operands_are_not_safe() {
-        for argv in [
-            vec!["svn", "log", "https://example.com/repo"],
-            vec!["svn", "info", "svn://example.com/repo"],
-            vec!["svn", "cat", "svn+ssh://example.com/repo/file"],
-            vec!["svn", "ls", "http://example.com/repo"],
-            vec!["svn", "diff", "file:///tmp/repo"],
-        ] {
-            assert!(
-                !is_safe_to_call_with_exec(&vec_str(&argv)),
-                "expected unsafe: {argv:?}"
-            );
-        }
-    }
-
-    /// `--diff-cmd` names a program to run. `--config-option` can set the same
-    /// thing indirectly, so blocking only the direct spelling would leave the
-    /// hole open.
-    #[test]
-    fn svn_options_that_execute_programs_are_not_safe() {
-        for argv in [
-            vec!["svn", "diff", "--diff-cmd", "/bin/sh"],
-            vec!["svn", "diff", "--diff-cmd=/bin/sh"],
-            vec!["svn", "diff", "--diff3-cmd", "/bin/sh"],
-            vec!["svn", "log", "--editor-cmd", "/bin/sh"],
-            vec![
-                "svn",
-                "diff",
-                "--config-option",
-                "config:helpers:diff-cmd=/bin/sh",
-            ],
-            vec!["svn", "diff", "--config-dir", "/tmp/evil"],
-            vec!["svn", "diff", "-x", "-w"],
-            vec!["svn", "diff", "--extensions", "-w"],
-        ] {
-            assert!(
-                !is_safe_to_call_with_exec(&vec_str(&argv)),
-                "expected unsafe: {argv:?}"
-            );
-        }
-    }
-
-    /// Credentials on a logged command line, and disabled certificate checks,
-    /// are refused even though neither writes to the repository.
-    #[test]
-    fn svn_credential_and_certificate_options_are_not_safe() {
-        for argv in [
-            vec!["svn", "log", "--username", "alice"],
-            vec!["svn", "log", "--password", "hunter2"],
-            vec!["svn", "log", "--password-from-stdin"],
-            vec!["svn", "info", "--trust-server-cert"],
-            vec!["svn", "info", "--trust-server-cert-failures=unknown-ca"],
-        ] {
-            assert!(
-                !is_safe_to_call_with_exec(&vec_str(&argv)),
-                "expected unsafe: {argv:?}"
-            );
-        }
-    }
-
-    /// An option preceding the subcommand must not hide the verb from the
-    /// allowlist check.
-    #[test]
-    fn svn_options_before_the_subcommand_do_not_mask_it() {
-        assert!(is_safe_to_call_with_exec(&vec_str(&[
-            "svn",
-            "--non-interactive",
-            "status"
-        ])));
-        assert!(!is_safe_to_call_with_exec(&vec_str(&[
-            "svn",
-            "--non-interactive",
-            "commit"
-        ])));
     }
 
     #[test]
@@ -881,12 +375,12 @@ mod tests {
     }
 
     #[test]
-    fn windows_git_full_path_is_safe() {
+    fn windows_git_full_path_is_not_safe() {
         if !cfg!(windows) {
             return;
         }
 
-        assert!(is_known_safe_command(&vec_str(&[
+        assert!(!is_known_safe_command(&vec_str(&[
             r"C:\Program Files\Git\cmd\git.exe",
             "status",
         ])));
@@ -896,11 +390,6 @@ mod tests {
     fn bash_lc_safe_examples() {
         assert!(is_known_safe_command(&vec_str(&["bash", "-lc", "ls"])));
         assert!(is_known_safe_command(&vec_str(&["bash", "-lc", "ls -1"])));
-        assert!(is_known_safe_command(&vec_str(&[
-            "bash",
-            "-lc",
-            "git status"
-        ])));
         assert!(is_known_safe_command(&vec_str(&[
             "bash",
             "-lc",

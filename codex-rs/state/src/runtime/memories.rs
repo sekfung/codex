@@ -211,8 +211,7 @@ SELECT
     threads.project_id,
     threads.git_sha,
     threads.git_branch,
-    threads.git_origin_url,
-    threads.git_vcs
+    threads.git_origin_url
 FROM threads
             "#,
         );
@@ -602,8 +601,7 @@ SELECT
     threads.project_id,
     threads.git_sha,
     threads.git_branch,
-    threads.git_origin_url,
-    threads.git_vcs
+    threads.git_origin_url
 FROM threads
 WHERE threads.id = ? AND threads.memory_mode = 'enabled'
             "#,

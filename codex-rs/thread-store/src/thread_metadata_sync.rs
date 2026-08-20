@@ -4,11 +4,12 @@ use std::time::Instant;
 use chrono::DateTime;
 use chrono::NaiveDateTime;
 use chrono::Utc;
+use codex_git_utils::collect_git_info;
+use codex_git_utils::get_git_repo_root;
 use codex_protocol::ThreadId;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GitInfo;
-use codex_protocol::protocol::GitSha;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::UserMessageEvent;
@@ -16,7 +17,6 @@ use codex_protocol::protocol::strip_user_message_prefix;
 use codex_protocol::protocol::user_message_preview;
 use codex_rollout::RolloutItem;
 use codex_state::ThreadMetadata;
-use codex_vcs_utils::collect_vcs_info;
 
 use crate::CreateThreadParams;
 use crate::GitInfoPatch;
@@ -53,16 +53,15 @@ impl ThreadMetadataSync {
     pub(crate) async fn for_create(params: &CreateThreadParams) -> Self {
         let created_at = Utc::now();
         let cwd = params.metadata.cwd.clone().unwrap_or_default();
-        // No `get_git_repo_root` gate: that probe asked "is this worth looking
-        // at" for git only, and would have skipped Subversion working copies
-        // before anything inspected them. `collect_vcs_info` detects either
-        // system itself and returns `None` when neither applies.
-        let git_info = collect_vcs_info(cwd.as_path()).await.map(|info| GitInfo {
-            vcs: info.vcs,
-            commit_hash: info.revision.map(GitSha),
-            branch: info.branch,
-            repository_url: info.repository_url,
-        });
+        let git_info = if get_git_repo_root(cwd.as_path()).is_some() {
+            collect_git_info(cwd.as_path()).await.map(|info| GitInfo {
+                commit_hash: info.commit_hash,
+                branch: info.branch,
+                repository_url: info.repository_url,
+            })
+        } else {
+            None
+        };
         let update = ThreadMetadataPatch {
             model_provider: Some(params.metadata.model_provider.clone()),
             created_at: Some(created_at),
@@ -398,10 +397,6 @@ fn git_info_patch_from_observation(git_info: GitInfo) -> GitInfoPatch {
         sha: git_info.commit_hash.map(|sha| Some(sha.0)),
         branch: git_info.branch.map(Some),
         origin_url: git_info.repository_url.map(Some),
-        // Always set, unlike the other three: they are omitted when the value
-        // is absent, but a record always belongs to some system, and leaving
-        // this unset would let a Subversion thread read back as git.
-        vcs: Some(Some(git_info.vcs)),
     }
 }
 
@@ -730,7 +725,6 @@ mod tests {
         meta.meta.history_mode = ThreadHistoryMode::Paginated;
         meta.meta.memory_mode = Some("disabled".to_string());
         meta.git = Some(GitInfo {
-            vcs: Default::default(),
             commit_hash: None,
             branch: Some("stale-branch".to_string()),
             repository_url: None,

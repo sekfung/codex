@@ -396,16 +396,6 @@ impl TurnRequestProcessor {
                     .filter(|t| !t.is_empty());
                 ApiReviewTarget::Commit { sha, title }
             }
-            ApiReviewTarget::Revision { revision, title } => {
-                let revision = revision.trim().to_string();
-                if revision.is_empty() {
-                    return Err(invalid_request("revision must not be empty".to_string()));
-                }
-                let title = title
-                    .map(|t| t.trim().to_string())
-                    .filter(|t| !t.is_empty());
-                ApiReviewTarget::Revision { revision, title }
-            }
             ApiReviewTarget::Custom { instructions } => {
                 let trimmed = instructions.trim().to_string();
                 if trimmed.is_empty() {
@@ -423,9 +413,6 @@ impl TurnRequestProcessor {
             ApiReviewTarget::UncommittedChanges => CoreReviewTarget::UncommittedChanges,
             ApiReviewTarget::BaseBranch { branch } => CoreReviewTarget::BaseBranch { branch },
             ApiReviewTarget::Commit { sha, title } => CoreReviewTarget::Commit { sha, title },
-            ApiReviewTarget::Revision { revision, title } => {
-                CoreReviewTarget::Revision { revision, title }
-            }
             ApiReviewTarget::Custom { instructions } => CoreReviewTarget::Custom { instructions },
         };
         let target_prompt = match &core_target {
@@ -438,9 +425,6 @@ impl TurnRequestProcessor {
             }
             CoreReviewTarget::Commit { sha, .. } => {
                 format!("Review the changes introduced by commit {sha:?}.")
-            }
-            CoreReviewTarget::Revision { revision, .. } => {
-                format!("Review the changes introduced by revision {revision:?}.")
             }
             CoreReviewTarget::Custom { instructions } => instructions.clone(),
         };

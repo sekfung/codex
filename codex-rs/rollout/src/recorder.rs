@@ -60,8 +60,9 @@ use crate::RolloutItem;
 use crate::config::RolloutConfigView;
 use crate::state_db;
 use crate::state_db::StateDbHandle;
+use codex_git_utils::collect_git_info;
+use codex_git_utils::get_git_repo_root;
 use codex_protocol::protocol::GitInfo as ProtocolGitInfo;
-use codex_protocol::protocol::GitSha;
 use codex_protocol::protocol::HistoryPosition;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionContextWindow;
@@ -72,7 +73,6 @@ use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSource;
 use codex_state::StateRuntime;
 use codex_utils_path as path_utils;
-use codex_vcs_utils::collect_vcs_info;
 
 /// Writes canonical session rollout items to JSONL.
 ///
@@ -1275,7 +1275,6 @@ fn fill_missing_thread_item_metadata(item: &mut ThreadItem, state_item: ThreadIt
         git_branch,
         git_sha,
         git_origin_url,
-        git_vcs,
         source,
         history_mode: _,
         parent_thread_id,
@@ -1304,9 +1303,6 @@ fn fill_missing_thread_item_metadata(item: &mut ThreadItem, state_item: ThreadIt
     }
     if git_sha.is_some() {
         item.git_sha = git_sha;
-    }
-    if git_vcs.is_some() {
-        item.git_vcs = git_vcs;
     }
     if git_origin_url.is_some() {
         item.git_origin_url = git_origin_url;
@@ -1859,16 +1855,15 @@ async fn write_session_meta(
     session_meta: SessionMeta,
     cwd: &Path,
 ) -> std::io::Result<()> {
-    // No `get_git_repo_root` gate: that probe answered "is this worth asking
-    // about" for git only, and would have skipped Subversion working copies
-    // before anything looked at them. `collect_vcs_info` does its own detection
-    // for both and returns `None` when neither applies.
-    let git_info = collect_vcs_info(cwd).await.map(|info| ProtocolGitInfo {
-        vcs: info.vcs,
-        commit_hash: info.revision.map(GitSha),
-        branch: info.branch,
-        repository_url: info.repository_url,
-    });
+    let git_info = if get_git_repo_root(cwd).is_some() {
+        collect_git_info(cwd).await.map(|info| ProtocolGitInfo {
+            commit_hash: info.commit_hash,
+            branch: info.branch,
+            repository_url: info.repository_url,
+        })
+    } else {
+        None
+    };
     let session_meta_line = SessionMetaLine {
         meta: session_meta,
         git: git_info,
@@ -2018,7 +2013,6 @@ fn thread_item_from_state_metadata(
         git_branch: item.git_branch,
         git_sha: item.git_sha,
         git_origin_url: item.git_origin_url,
-        git_vcs: item.git_vcs,
         source: Some(
             serde_json::from_str(item.source.as_str())
                 .or_else(|_| serde_json::from_value(Value::String(item.source)))

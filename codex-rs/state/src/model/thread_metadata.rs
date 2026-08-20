@@ -184,12 +184,6 @@ pub struct ThreadMetadata {
     pub git_branch: Option<String>,
     /// The git origin URL, if known.
     pub git_origin_url: Option<String>,
-    /// Which version control system the `git_*` fields describe, if recorded.
-    ///
-    /// `None` means the row predates Subversion support, and every such row was
-    /// written by a git-only build — so readers resolve it to git rather than
-    /// treating it as unknown.
-    pub git_vcs: Option<String>,
 }
 
 /// Builder data required to construct [`ThreadMetadata`] without parsing filenames.
@@ -235,12 +229,6 @@ pub struct ThreadMetadataBuilder {
     pub git_branch: Option<String>,
     /// The git origin URL, if known.
     pub git_origin_url: Option<String>,
-    /// Which version control system the `git_*` fields describe, if recorded.
-    ///
-    /// `None` means the row predates Subversion support, and every such row was
-    /// written by a git-only build — so readers resolve it to git rather than
-    /// treating it as unknown.
-    pub git_vcs: Option<String>,
 }
 
 impl ThreadMetadataBuilder {
@@ -272,7 +260,6 @@ impl ThreadMetadataBuilder {
             git_sha: None,
             git_branch: None,
             git_origin_url: None,
-            git_vcs: None,
         }
     }
 
@@ -328,7 +315,6 @@ impl ThreadMetadataBuilder {
             git_sha: self.git_sha.clone(),
             git_branch: self.git_branch.clone(),
             git_origin_url: self.git_origin_url.clone(),
-            git_vcs: self.git_vcs.clone(),
         }
     }
 }
@@ -346,7 +332,6 @@ impl ThreadMetadata {
             self.git_sha = existing.git_sha.clone();
             self.git_branch = existing.git_branch.clone();
             self.git_origin_url = existing.git_origin_url.clone();
-            self.git_vcs = existing.git_vcs.clone();
             return;
         }
         if existing.git_sha.is_some() {
@@ -355,12 +340,8 @@ impl ThreadMetadata {
         if existing.git_branch.is_some() {
             self.git_branch = existing.git_branch.clone();
         }
-        if existing.git_vcs.is_some() {
-            self.git_vcs = existing.git_vcs.clone();
-        }
         if existing.git_origin_url.is_some() {
             self.git_origin_url = existing.git_origin_url.clone();
-            self.git_vcs = existing.git_vcs.clone();
         }
     }
 
@@ -463,9 +444,6 @@ impl ThreadMetadata {
         if self.git_branch != other.git_branch {
             diffs.push("git_branch");
         }
-        if self.git_vcs != other.git_vcs {
-            diffs.push("git_vcs");
-        }
         if self.git_origin_url != other.git_origin_url {
             diffs.push("git_origin_url");
         }
@@ -512,7 +490,6 @@ pub(crate) struct ThreadRow {
     git_sha: Option<String>,
     git_branch: Option<String>,
     git_origin_url: Option<String>,
-    git_vcs: Option<String>,
 }
 
 impl ThreadRow {
@@ -551,7 +528,6 @@ impl ThreadRow {
             git_sha: row.try_get("git_sha")?,
             git_branch: row.try_get("git_branch")?,
             git_origin_url: row.try_get("git_origin_url")?,
-            git_vcs: row.try_get("git_vcs")?,
         })
     }
 }
@@ -594,7 +570,6 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             git_sha,
             git_branch,
             git_origin_url,
-            git_vcs,
         } = row;
         let thread_source = thread_source
             .map(|thread_source| thread_source.parse())
@@ -652,7 +627,6 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             git_sha,
             git_branch,
             git_origin_url,
-            git_vcs,
         })
     }
 }
@@ -760,7 +734,6 @@ mod tests {
             git_sha: None,
             git_branch: None,
             git_origin_url: None,
-            git_vcs: None,
         }
     }
 
@@ -798,7 +771,6 @@ mod tests {
             git_sha: None,
             git_branch: None,
             git_origin_url: None,
-            git_vcs: None,
         }
     }
 

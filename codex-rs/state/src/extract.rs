@@ -84,11 +84,6 @@ fn apply_session_meta_from_item(metadata: &mut ThreadMetadata, meta_line: &Sessi
         metadata.git_sha = git.commit_hash.as_ref().map(|sha| sha.0.clone());
         metadata.git_branch = git.branch.clone();
         metadata.git_origin_url = git.repository_url.clone();
-        // Stored as the serialized discriminator so the column holds exactly
-        // what the rollout file holds, rather than a second spelling of it.
-        metadata.git_vcs = serde_json::to_value(git.vcs)
-            .ok()
-            .and_then(|value| value.as_str().map(str::to_string));
     }
 }
 
@@ -716,7 +711,6 @@ mod tests {
             git_sha: None,
             git_branch: None,
             git_origin_url: None,
-            git_vcs: None,
         }
     }
 

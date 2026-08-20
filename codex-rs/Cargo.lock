@@ -2170,7 +2170,6 @@ dependencies = [
  "codex-git-attribution",
  "codex-git-utils",
  "codex-goal-extension",
- "codex-guardian",
  "codex-guardian-v2",
  "codex-home",
  "codex-hooks",
@@ -2964,7 +2963,6 @@ dependencies = [
  "codex-utils-pty",
  "codex-utils-stream-parser",
  "codex-utils-string",
- "codex-vcs-utils",
  "codex-web-search-extension",
  "codex-windows-sandbox",
  "core_test_support",
@@ -3114,7 +3112,6 @@ dependencies = [
  "codex-utils-absolute-path",
  "codex-utils-approval-presets",
  "codex-utils-home-dir",
- "codex-vcs-utils",
  "pretty_assertions",
  "serde",
  "serde_json",
@@ -3482,15 +3479,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "codex-guardian"
-version = "0.0.0"
-dependencies = [
- "codex-core",
- "codex-extension-api",
- "codex-protocol",
 ]
 
 [[package]]
@@ -4092,9 +4080,7 @@ dependencies = [
  "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-template",
- "codex-vcs-utils",
  "pretty_assertions",
- "tempfile",
 ]
 
 [[package]]
@@ -4247,7 +4233,6 @@ dependencies = [
  "codex-state",
  "codex-utils-absolute-path",
  "codex-utils-path",
- "codex-vcs-utils",
  "pretty_assertions",
  "regex",
  "serde",
@@ -4336,6 +4321,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shlex",
+ "tempfile",
  "tree-sitter",
  "tree-sitter-bash",
  "tree-sitter-powershell",
@@ -4495,7 +4481,6 @@ dependencies = [
  "codex-utils-absolute-path",
  "codex-utils-path",
  "codex-utils-path-uri",
- "codex-vcs-utils",
  "futures",
  "pretty_assertions",
  "pulldown-cmark",
@@ -4591,7 +4576,6 @@ dependencies = [
  "codex-utils-sandbox-summary",
  "codex-utils-sleep-inhibitor",
  "codex-utils-string",
- "codex-vcs-utils",
  "codex-windows-sandbox",
  "color-eyre",
  "core_test_support",
@@ -4907,22 +4891,6 @@ version = "0.0.0"
 dependencies = [
  "pretty_assertions",
  "v8",
-]
-
-[[package]]
-name = "codex-vcs-utils"
-version = "0.0.0"
-dependencies = [
- "codex-file-system",
- "codex-git-utils",
- "codex-protocol",
- "codex-utils-absolute-path",
- "codex-utils-path-uri",
- "pretty_assertions",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
 ]
 
 [[package]]

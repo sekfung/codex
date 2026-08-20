@@ -46,20 +46,3 @@ fn commit_option_names_its_time_unit_on_the_wire() {
         })
     );
 }
-
-/// A Subversion working copy is not a git repo, but it is not "nothing"
-/// either: the picker needs to know to offer the revision target, which is the
-/// only one the engine can run there.
-#[tokio::test]
-async fn svn_working_copy_is_reported_as_subversion() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    std::fs::create_dir_all(tmp.path().join(".svn")).expect("create .svn");
-
-    let refs = git_refs(tmp.path().to_string_lossy().into_owned())
-        .await
-        .expect("git_refs");
-
-    assert_eq!(refs.vcs, PickerVcs::Subversion);
-    assert!(!refs.is_git_repo);
-    assert!(refs.branches.is_empty());
-}

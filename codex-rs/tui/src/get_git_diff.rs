@@ -1,10 +1,9 @@
-//! Utility to compute the current diff for the working directory.
+//! Utility to compute the current Git diff for the working directory.
 //!
 //! The implementation mirrors the behaviour of the TypeScript version in
 //! `codex-cli`: it returns the diff for tracked changes as well as any
-//! untracked files for both Git and Subversion working copies. When the
-//! current directory is not inside a version-control working copy, the
-//! function returns `Ok((false, String::new()))`.
+//! untracked files. When the current directory is not inside a Git
+//! repository, the function returns `Ok((false, String::new()))`.
 
 use std::path::Path;
 use std::time::Duration;
@@ -15,7 +14,6 @@ use crate::workspace_command::WorkspaceCommandOutput;
 use codex_git_utils::FsmonitorOverride;
 use codex_git_utils::FsmonitorProbeRunner;
 use codex_git_utils::detect_fsmonitor_override;
-use codex_vcs_utils::is_svn_working_copy;
 
 const DIFF_COMMAND_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 30);
 const DISABLE_HOOKS_CONFIG: &str = if cfg!(windows) {
@@ -48,8 +46,7 @@ impl FsmonitorProbeRunner for WorkspaceFsmonitorProbeRunner<'_> {
 
 /// Return value of [`get_git_diff`].
 ///
-/// * `bool` – Whether the current working directory is inside a version-control
-///   working copy (Git repository or Subversion working copy).
+/// * `bool` – Whether the current working directory is inside a Git repo.
 /// * `String` – The concatenated diff (may be empty).
 pub(crate) async fn get_git_diff(
     runner: &dyn WorkspaceCommandExecutor,
@@ -57,10 +54,6 @@ pub(crate) async fn get_git_diff(
 ) -> Result<(bool, String), String> {
     // First check if we are inside a Git repository.
     if !inside_git_repo(runner, cwd).await? {
-        // Not a Git repository — check whether this is a Subversion working copy.
-        if is_svn_working_copy(cwd) {
-            return get_svn_diff(runner, cwd).await;
-        }
         return Ok((false, String::new()));
     }
 
@@ -126,31 +119,6 @@ pub(crate) async fn get_git_diff(
     }
 
     Ok((true, format!("{tracked_diff}{untracked_diff}")))
-}
-
-/// Computes the diff for a Subversion working copy by running `svn diff`.
-///
-/// Subversion's diff command reports the uncommitted changes in the working
-/// copy relative to its base. Exit status 0 means no changes, 1 means changes
-/// present — both are valid outcomes, so this function accepts either.
-async fn get_svn_diff(
-    runner: &dyn WorkspaceCommandExecutor,
-    cwd: &Path,
-) -> Result<(bool, String), String> {
-    let command = WorkspaceCommand::new(["svn", "diff", "--non-interactive"])
-        .cwd(cwd.to_path_buf())
-        .timeout(DIFF_COMMAND_TIMEOUT)
-        .disable_output_cap();
-    let output = runner.run(command).await.map_err(|err| err.to_string())?;
-
-    if output.success() || output.exit_code == 1 {
-        Ok((true, output.stdout))
-    } else {
-        Err(format!(
-            "svn diff failed with status {}",
-            output.exit_code
-        ))
-    }
 }
 
 /// Helper that executes `git` with the given `args` and returns `stdout` as a
@@ -323,64 +291,6 @@ mod tests {
 
         assert_eq!(result, Ok((false, String::new())));
         assert_command_metadata(&runner.commands(), &cwd);
-    }
-
-    /// A Subversion working copy produces a diff through `svn diff`.
-    #[tokio::test]
-    async fn get_git_diff_supports_svn_working_copies() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        std::fs::create_dir(tmp.path().join(".svn")).expect("create .svn");
-        let runner = FakeRunner::new(vec![
-            response(
-                git_command(
-                    FsmonitorOverride::Disabled,
-                    &["rev-parse", "--is-inside-work-tree"],
-                ),
-                /*exit_code*/ 128,
-                "",
-            ),
-            response(
-                ["svn", "diff", "--non-interactive"]
-                    .into_iter()
-                    .map(str::to_string)
-                    .collect(),
-                /*exit_code*/ 1,
-                "Index: file.txt\n",
-            ),
-        ]);
-
-        let result = get_git_diff(&runner, tmp.path()).await;
-
-        assert_eq!(result, Ok((true, "Index: file.txt\n".to_string())));
-    }
-
-    /// A Subversion working copy with no changes yields an empty diff.
-    #[tokio::test]
-    async fn get_git_diff_svn_empty_diff_is_ok() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        std::fs::create_dir(tmp.path().join(".svn")).expect("create .svn");
-        let runner = FakeRunner::new(vec![
-            response(
-                git_command(
-                    FsmonitorOverride::Disabled,
-                    &["rev-parse", "--is-inside-work-tree"],
-                ),
-                /*exit_code*/ 128,
-                "",
-            ),
-            response(
-                ["svn", "diff", "--non-interactive"]
-                    .into_iter()
-                    .map(str::to_string)
-                    .collect(),
-                /*exit_code*/ 0,
-                "",
-            ),
-        ]);
-
-        let result = get_git_diff(&runner, tmp.path()).await;
-
-        assert_eq!(result, Ok((true, String::new())));
     }
 
     #[tokio::test]
